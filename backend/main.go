@@ -16,6 +16,18 @@ func main() {
 		log.Println("No .env file found")
 	}
 
+	// Initialize configuration (sets dev/prod mode)
+	config.InitConfig()
+	
+	// Set Gin mode based on environment
+	if config.IsProduction() {
+		gin.SetMode(gin.ReleaseMode)
+		log.Println("🚀 Running in PRODUCTION mode")
+	} else {
+		gin.SetMode(gin.DebugMode)
+		log.Println("🔧 Running in DEVELOPMENT mode")
+	}
+
 	// Initialize database
 	config.InitDB()
 

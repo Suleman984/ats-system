@@ -154,15 +154,22 @@ function StatsCard({
   value: number;
   color: string;
 }) {
-  const colors: Record<string, string> = {
-    blue: "bg-blue-500",
-    green: "bg-green-500",
-    purple: "bg-purple-500",
-    orange: "bg-orange-500",
+  const colors: Record<string, { bg: string; icon: string }> = {
+    blue: { bg: "bg-blue-500", icon: "💼" },
+    green: { bg: "bg-green-500", icon: "✅" },
+    purple: { bg: "bg-purple-500", icon: "📋" },
+    orange: { bg: "bg-orange-500", icon: "⭐" },
   };
+
+  const colorConfig = colors[color] || colors.blue;
+
   return (
     <div className="bg-white rounded-lg shadow p-6">
-      <div className={`w-12 h-12 ${colors[color]} rounded-lg mb-4`}></div>
+      <div
+        className={`w-12 h-12 ${colorConfig.bg} rounded-lg mb-4 flex items-center justify-center text-2xl`}
+      >
+        {colorConfig.icon}
+      </div>
       <p className="text-gray-600 text-sm">{title}</p>
       <p className="text-3xl font-bold">{value}</p>
     </div>

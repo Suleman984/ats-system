@@ -33,9 +33,20 @@ export default function DashboardLayout({
     return null;
   }
 
+  const appMode = process.env.NEXT_PUBLIC_APP_MODE || "development";
+  const isProduction = appMode === "production";
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <nav className="bg-white shadow-sm">
+      {/* Mode Indicator in Dashboard */}
+      <div
+        className={`fixed top-0 left-0 right-0 text-center py-1 text-xs font-semibold z-40 ${
+          isProduction ? "bg-green-600 text-white" : "bg-yellow-500 text-black"
+        }`}
+      >
+        {isProduction ? "🚀 PRODUCTION MODE" : "🔧 DEVELOPMENT MODE"}
+      </div>
+      <nav className="bg-white shadow-sm mt-7">
         <div className="max-w-7xl mx-auto px-6">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-8">
