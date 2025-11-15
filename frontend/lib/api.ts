@@ -30,6 +30,8 @@ export interface RegisterRequest {
   email: string;
   password: string;
   name: string;
+  embedded_mode?: boolean;
+  embed_domain?: string;
 }
 
 export interface LoginRequest {
@@ -42,6 +44,8 @@ export interface Company {
   company_name: string;
   email: string;
   company_website?: string;
+  embedded_mode?: boolean;
+  embed_domain?: string;
   subscription_status: string;
   subscription_tier: string;
   created_at: string;

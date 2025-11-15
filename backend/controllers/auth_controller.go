@@ -17,10 +17,12 @@ type LoginRequest struct {
 }
 
 type RegisterRequest struct {
-	CompanyName string `json:"company_name" binding:"required"`
-	Email       string `json:"email" binding:"required,email"`
-	Password    string `json:"password" binding:"required,min=6"`
-	Name        string `json:"name" binding:"required"`
+	CompanyName  string `json:"company_name" binding:"required"`
+	Email        string `json:"email" binding:"required,email"`
+	Password     string `json:"password" binding:"required,min=6"`
+	Name         string `json:"name" binding:"required"`
+	EmbeddedMode bool   `json:"embedded_mode"` // Use embedded dashboard
+	EmbedDomain  string `json:"embed_domain"`  // Allowed domain for embedding (optional)
 }
 
 // Login authenticates admin and returns JWT token
@@ -80,10 +82,16 @@ func Register(c *gin.Context) {
 	company := models.Company{
 		CompanyName:       req.CompanyName,
 		Email:             req.Email,
+		EmbeddedMode:      req.EmbeddedMode,
 		SubscriptionStatus: "trial",
 		SubscriptionTier:  "starter",
 		CreatedAt:         time.Now(),
 		UpdatedAt:         time.Now(),
+	}
+	
+	// Set embed domain if provided
+	if req.EmbedDomain != "" {
+		company.EmbedDomain = &req.EmbedDomain
 	}
 
 	if err := config.DB.Create(&company).Error; err != nil {

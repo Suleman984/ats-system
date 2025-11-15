@@ -13,6 +13,8 @@ export default function RegisterPage() {
     email: "",
     password: "",
     name: "",
+    embedded_mode: false,
+    embed_domain: "",
   });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -96,6 +98,61 @@ export default function RegisterPage() {
               }
             />
           </div>
+
+          {/* Embedded Mode Option */}
+          <div className="border-t pt-4 mt-4">
+            <div className="flex items-center mb-4">
+              <input
+                type="checkbox"
+                id="embedded_mode"
+                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                checked={formData.embedded_mode}
+                onChange={(e) =>
+                  setFormData({ ...formData, embedded_mode: e.target.checked })
+                }
+              />
+              <label
+                htmlFor="embedded_mode"
+                className="ml-2 text-sm font-medium"
+              >
+                Use Embedded Dashboard Mode
+              </label>
+            </div>
+            {formData.embedded_mode && (
+              <div className="ml-6 mb-4">
+                <label className="block text-sm font-medium mb-2">
+                  Your Website Domain (Optional)
+                  <span className="text-gray-500 text-xs ml-2">
+                    (e.g., example.com - for security)
+                  </span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="example.com"
+                  className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                  value={formData.embed_domain}
+                  onChange={(e) =>
+                    setFormData({ ...formData, embed_domain: e.target.value })
+                  }
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  If provided, the dashboard can only be embedded on this domain
+                  for security.
+                </p>
+              </div>
+            )}
+            {formData.embedded_mode && (
+              <div className="ml-6 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <p className="text-xs text-blue-800">
+                  <strong>Note:</strong> In embedded mode, you'll get an embed
+                  code to integrate the entire ATS dashboard into your website.
+                  You can still access it normally by logging in, but you'll
+                  also have the option to embed it.
+                </p>
+              </div>
+            )}
+          </div>
+
           <button
             type="submit"
             disabled={loading}

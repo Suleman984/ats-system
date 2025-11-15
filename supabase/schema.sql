@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS companies (
     company_name VARCHAR(255) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
     company_website VARCHAR(255),
+    embedded_mode BOOLEAN DEFAULT false, -- Use embedded dashboard
+    embed_domain VARCHAR(255), -- Allowed domain for embedding
     subscription_status VARCHAR(50) DEFAULT 'trial', -- trial, active, cancelled
     subscription_tier VARCHAR(50) DEFAULT 'starter', -- starter, pro, enterprise
     created_at TIMESTAMP DEFAULT NOW(),
