@@ -1,0 +1,257 @@
+package controllers
+
+import (
+	"ats-backend/config"
+	"ats-backend/models"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+)
+
+// CreateJob creates a new job posting
+func CreateJob(c *gin.Context) {
+	var jobRequest struct {
+		Title            string `json:"title" binding:"required"`
+		Description      string `json:"description" binding:"required"`
+		Requirements     string `json:"requirements"`
+		Location         string `json:"location"`
+		JobType          string `json:"job_type"`
+		SalaryRange      string `json:"salary_range"`
+		Deadline         string `json:"deadline" binding:"required"`
+		Status           string `json:"status"`
+		AutoShortlist    bool   `json:"auto_shortlist"`
+		ShortlistCriteria string `json:"shortlist_criteria"`
+	}
+
+	if err := c.ShouldBindJSON(&jobRequest); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Get company ID from JWT token (set by auth middleware)
+	companyIDStr := c.GetString("company_id")
+	companyID, err := uuid.Parse(companyIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
+		return
+	}
+
+	// Parse deadline date string (format: "YYYY-MM-DD")
+	deadlineStr := strings.TrimSpace(jobRequest.Deadline)
+	deadlineTime, err := time.Parse("2006-01-02", deadlineStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Invalid deadline format. Use YYYY-MM-DD",
+			"details": err.Error(),
+			"received": deadlineStr,
+		})
+		return
+	}
+	
+	// Create DateOnly type
+	deadline := models.DateOnly{
+		Time: time.Date(deadlineTime.Year(), deadlineTime.Month(), deadlineTime.Day(), 0, 0, 0, 0, time.UTC),
+	}
+
+	// Create job model
+	job := models.Job{
+		CompanyID:        companyID,
+		Title:            jobRequest.Title,
+		Description:      jobRequest.Description,
+		Requirements:     jobRequest.Requirements,
+		Location:         jobRequest.Location,
+		JobType:          jobRequest.JobType,
+		SalaryRange:      jobRequest.SalaryRange,
+		Deadline:         deadline,
+		Status:           jobRequest.Status,
+		AutoShortlist:    jobRequest.AutoShortlist,
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
+	}
+
+	if job.Status == "" {
+		job.Status = "open"
+	}
+	if !job.AutoShortlist {
+		job.AutoShortlist = true
+	}
+	
+	// Handle shortlist_criteria - only set if not empty, otherwise leave as NULL
+	if jobRequest.ShortlistCriteria != "" {
+		job.ShortlistCriteria = &jobRequest.ShortlistCriteria
+	}
+
+	// Save to database
+	if err := config.DB.Create(&job).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "Failed to create job",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message": "Job created successfully",
+		"job":     job,
+	})
+}
+
+// GetJobs returns all jobs for a company
+func GetJobs(c *gin.Context) {
+	companyID := c.GetString("company_id")
+	var jobs []models.Job
+
+	query := config.DB.Where("company_id = ?", companyID)
+
+	// Filter by status if provided
+	if status := c.Query("status"); status != "" {
+		query = query.Where("status = ?", status)
+	}
+
+	if err := query.Find(&jobs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch jobs"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"jobs": jobs})
+}
+
+// GetJob returns a single job by ID
+func GetJob(c *gin.Context) {
+	jobID := c.Param("id")
+	companyID := c.GetString("company_id")
+
+	var job models.Job
+	if err := config.DB.Where("id = ? AND company_id = ?", jobID, companyID).First(&job).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"job": job})
+}
+
+// GetPublicJobs returns open jobs for public (no auth needed)
+func GetPublicJobs(c *gin.Context) {
+	companyID := c.Param("companyId")
+	var jobs []models.Job
+
+	now := time.Now()
+	err := config.DB.Where("company_id = ? AND status = ? AND deadline > ?",
+		companyID, "open", now.Format("2006-01-02")).Find(&jobs).Error
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch jobs"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"jobs": jobs})
+}
+
+// UpdateJob updates an existing job
+func UpdateJob(c *gin.Context) {
+	jobID := c.Param("id")
+	companyID := c.GetString("company_id")
+
+	var job models.Job
+	if err := config.DB.Where("id = ? AND company_id = ?", jobID, companyID).First(&job).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
+		return
+	}
+
+	var jobRequest struct {
+		Title            string `json:"title"`
+		Description      string `json:"description"`
+		Requirements     string `json:"requirements"`
+		Location         string `json:"location"`
+		JobType          string `json:"job_type"`
+		SalaryRange      string `json:"salary_range"`
+		Deadline         string `json:"deadline"`
+		Status           string `json:"status"`
+		AutoShortlist    bool   `json:"auto_shortlist"`
+		ShortlistCriteria string `json:"shortlist_criteria"`
+	}
+
+	if err := c.ShouldBindJSON(&jobRequest); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Update fields if provided
+	if jobRequest.Title != "" {
+		job.Title = jobRequest.Title
+	}
+	if jobRequest.Description != "" {
+		job.Description = jobRequest.Description
+	}
+	if jobRequest.Requirements != "" {
+		job.Requirements = jobRequest.Requirements
+	}
+	if jobRequest.Location != "" {
+		job.Location = jobRequest.Location
+	}
+	if jobRequest.JobType != "" {
+		job.JobType = jobRequest.JobType
+	}
+	if jobRequest.SalaryRange != "" {
+		job.SalaryRange = jobRequest.SalaryRange
+	}
+	if jobRequest.Deadline != "" {
+		deadlineStr := strings.TrimSpace(jobRequest.Deadline)
+		deadlineTime, err := time.Parse("2006-01-02", deadlineStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "Invalid deadline format. Use YYYY-MM-DD",
+				"details": err.Error(),
+			})
+			return
+		}
+		// Create DateOnly type
+		job.Deadline = models.DateOnly{
+			Time: time.Date(deadlineTime.Year(), deadlineTime.Month(), deadlineTime.Day(), 0, 0, 0, 0, time.UTC),
+		}
+	}
+	if jobRequest.Status != "" {
+		job.Status = jobRequest.Status
+	}
+	job.AutoShortlist = jobRequest.AutoShortlist
+	if jobRequest.ShortlistCriteria != "" {
+		job.ShortlistCriteria = &jobRequest.ShortlistCriteria
+	} else {
+		job.ShortlistCriteria = nil
+	}
+
+	job.UpdatedAt = time.Now()
+
+	if err := config.DB.Save(&job).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update job"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Job updated successfully",
+		"job":     job,
+	})
+}
+
+// DeleteJob deletes a job
+func DeleteJob(c *gin.Context) {
+	jobID := c.Param("id")
+	companyID := c.GetString("company_id")
+
+	var job models.Job
+	if err := config.DB.Where("id = ? AND company_id = ?", jobID, companyID).First(&job).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
+		return
+	}
+
+	if err := config.DB.Delete(&job).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete job"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Job deleted successfully"})
+}
+
