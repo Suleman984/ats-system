@@ -95,7 +95,16 @@ func SubmitApplication(c *gin.Context) {
 
 // GetApplications returns all applications for company's jobs
 func GetApplications(c *gin.Context) {
-	companyID := c.GetString("company_id")
+	companyIDVal, exists := c.Get("company_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+		return
+	}
+	companyID, ok := companyIDVal.(string)
+	if !ok || companyID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
+		return
+	}
 	var applications []models.Application
 
 	// Join with jobs table to filter by company
@@ -147,7 +156,16 @@ func GetApplications(c *gin.Context) {
 // ShortlistApplication marks an application as shortlisted
 func ShortlistApplication(c *gin.Context) {
 	applicationID := c.Param("id")
-	companyID := c.GetString("company_id")
+	companyIDVal, exists := c.Get("company_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+		return
+	}
+	companyID, ok := companyIDVal.(string)
+	if !ok || companyID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
+		return
+	}
 
 	var application models.Application
 	// Verify application belongs to company
@@ -189,7 +207,16 @@ func ShortlistApplication(c *gin.Context) {
 // RejectApplication marks an application as rejected
 func RejectApplication(c *gin.Context) {
 	applicationID := c.Param("id")
-	companyID := c.GetString("company_id")
+	companyIDVal, exists := c.Get("company_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+		return
+	}
+	companyID, ok := companyIDVal.(string)
+	if !ok || companyID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
+		return
+	}
 
 	var application models.Application
 	err := config.DB.Joins("JOIN jobs ON jobs.id = applications.job_id").

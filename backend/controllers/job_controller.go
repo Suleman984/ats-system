@@ -3,6 +3,7 @@ package controllers
 import (
 	"ats-backend/config"
 	"ats-backend/models"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -10,6 +11,19 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
+
+// Helper function to get company_id from context
+func getCompanyID(c *gin.Context) (string, error) {
+	companyIDVal, exists := c.Get("company_id")
+	if !exists {
+		return "", gin.Error{Err: nil, Type: gin.ErrorTypePublic, Meta: "Company ID not found in token"}
+	}
+	companyID, ok := companyIDVal.(string)
+	if !ok || companyID == "" {
+		return "", gin.Error{Err: nil, Type: gin.ErrorTypePublic, Meta: "Invalid company ID"}
+	}
+	return companyID, nil
+}
 
 // CreateJob creates a new job posting
 func CreateJob(c *gin.Context) {
@@ -32,10 +46,31 @@ func CreateJob(c *gin.Context) {
 	}
 
 	// Get company ID from JWT token (set by auth middleware)
-	companyIDStr := c.GetString("company_id")
+	companyIDVal, exists := c.Get("company_id")
+	if !exists {
+		log.Printf("CreateJob: ERROR - company_id not found in context")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+		return
+	}
+	
+	companyIDStr, ok := companyIDVal.(string)
+	if !ok || companyIDStr == "" {
+		log.Printf("CreateJob: ERROR - company_id is invalid, type: %T, value: '%v'", companyIDVal, companyIDVal)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Company ID is invalid",
+			"details": "Your authentication token does not contain a valid company ID. Please log out and log in again.",
+		})
+		return
+	}
+	
+	log.Printf("CreateJob: Extracted company_id: '%s'", companyIDStr)
 	companyID, err := uuid.Parse(companyIDStr)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
+		log.Printf("CreateJob: ERROR - Failed to parse company_id '%s': %v", companyIDStr, err)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid company ID format",
+			"details": "The company ID in your token is not in a valid format.",
+		})
 		return
 	}
 
@@ -101,7 +136,11 @@ func CreateJob(c *gin.Context) {
 
 // GetJobs returns all jobs for a company
 func GetJobs(c *gin.Context) {
-	companyID := c.GetString("company_id")
+	companyID, err := getCompanyID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+		return
+	}
 	var jobs []models.Job
 
 	query := config.DB.Where("company_id = ?", companyID)
@@ -122,7 +161,11 @@ func GetJobs(c *gin.Context) {
 // GetJob returns a single job by ID
 func GetJob(c *gin.Context) {
 	jobID := c.Param("id")
-	companyID := c.GetString("company_id")
+	companyID, err := getCompanyID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+		return
+	}
 
 	var job models.Job
 	if err := config.DB.Where("id = ? AND company_id = ?", jobID, companyID).First(&job).Error; err != nil {
@@ -153,7 +196,11 @@ func GetPublicJobs(c *gin.Context) {
 // UpdateJob updates an existing job
 func UpdateJob(c *gin.Context) {
 	jobID := c.Param("id")
-	companyID := c.GetString("company_id")
+	companyID, err := getCompanyID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+		return
+	}
 
 	var job models.Job
 	if err := config.DB.Where("id = ? AND company_id = ?", jobID, companyID).First(&job).Error; err != nil {
@@ -239,7 +286,11 @@ func UpdateJob(c *gin.Context) {
 // DeleteJob deletes a job
 func DeleteJob(c *gin.Context) {
 	jobID := c.Param("id")
-	companyID := c.GetString("company_id")
+	companyID, err := getCompanyID(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+		return
+	}
 
 	var job models.Job
 	if err := config.DB.Where("id = ? AND company_id = ?", jobID, companyID).First(&job).Error; err != nil {

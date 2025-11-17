@@ -29,7 +29,16 @@ func AIShortlistApplication(c *gin.Context) {
 		return
 	}
 
-	companyID := c.GetString("company_id")
+	companyIDVal, exists := c.Get("company_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+		return
+	}
+	companyID, ok := companyIDVal.(string)
+	if !ok || companyID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
+		return
+	}
 
 	// Get application
 	var application models.Application
@@ -124,7 +133,16 @@ func BatchAIShortlist(c *gin.Context) {
 		return
 	}
 
-	companyID := c.GetString("company_id")
+	companyIDVal, exists := c.Get("company_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+		return
+	}
+	companyID, ok := companyIDVal.(string)
+	if !ok || companyID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
+		return
+	}
 	threshold := req.Threshold
 	if threshold == 0 {
 		threshold = 70 // Default threshold
