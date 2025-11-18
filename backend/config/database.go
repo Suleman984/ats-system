@@ -44,6 +44,7 @@ func InitDB() {
 		&models.SubscriptionPlan{},
 		&models.Subscription{},
 		&models.Payment{},
+		&models.ActivityLog{},
 	)
 	if err != nil {
 		// Check if error is just "relation already exists" - this is OK, tables exist

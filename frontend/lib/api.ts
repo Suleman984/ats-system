@@ -137,6 +137,21 @@ export interface CompanyWithStats extends Company {
   application_count: number;
 }
 
+// Activity Log Types
+export interface ActivityLog {
+  id: string;
+  company_id?: string;
+  admin_id?: string;
+  action_type: string; // company_registered, job_created, job_updated, job_deleted, application_shortlisted, etc.
+  entity_type: string; // company, job, application, etc.
+  entity_id?: string;
+  description: string;
+  metadata?: any; // JSON object with additional details
+  created_at: string;
+  admin?: Admin;
+  company?: Company;
+}
+
 // Super Admin APIs
 export const superAdminAPI = {
   login: (data: LoginRequest) =>
@@ -144,6 +159,35 @@ export const superAdminAPI = {
   getStats: () => api.get<{ stats: SuperAdminStats }>("/super-admin/stats"),
   getAllCompanies: () =>
     api.get<{ companies: CompanyWithStats[] }>("/super-admin/companies"),
+};
+
+// Activity Log APIs
+export const activityLogAPI = {
+  getAll: (params?: {
+    action_type?: string;
+    entity_type?: string;
+    date_from?: string;
+    date_to?: string;
+  }) =>
+    api.get<{ logs: ActivityLog[]; count: number }>("/activity-logs", {
+      params,
+    }),
+};
+
+export const superAdminActivityLogAPI = {
+  getAll: (params?: {
+    company_id?: string;
+    action_type?: string;
+    entity_type?: string;
+    date_from?: string;
+    date_to?: string;
+  }) =>
+    api.get<{ logs: ActivityLog[]; count: number }>(
+      "/super-admin/activity-logs",
+      {
+        params,
+      }
+    ),
 };
 
 // Job APIs

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // SubmitApplication handles job application submission
@@ -168,15 +169,19 @@ func ShortlistApplication(c *gin.Context) {
 	}
 
 	var application models.Application
-	// Verify application belongs to company
+	// Verify application belongs to company and preload job
 	err := config.DB.Joins("JOIN jobs ON jobs.id = applications.job_id").
 		Where("applications.id = ? AND jobs.company_id = ?", applicationID, companyID).
+		Preload("Job").
 		First(&application).Error
 
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Application not found"})
 		return
 	}
+
+	// Store old status for logging
+	oldStatus := application.Status
 
 	// Update status
 	now := time.Now()
@@ -187,6 +192,16 @@ func ShortlistApplication(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update application"})
 		return
 	}
+
+	// Log application shortlisting
+	companyUUID, _ := uuid.Parse(companyID)
+	adminIDVal, _ := c.Get("admin_id")
+	adminIDStr, _ := adminIDVal.(string)
+	adminUUID, _ := uuid.Parse(adminIDStr)
+	applicationUUID, _ := uuid.Parse(applicationID)
+	jobTitle := application.Job.Title
+
+	services.LogApplicationStatusChanged(companyUUID, adminUUID, applicationUUID, application.FullName, jobTitle, oldStatus, "shortlisted")
 
 	// Send shortlist email (async with error logging)
 	go func() {
@@ -221,12 +236,16 @@ func RejectApplication(c *gin.Context) {
 	var application models.Application
 	err := config.DB.Joins("JOIN jobs ON jobs.id = applications.job_id").
 		Where("applications.id = ? AND jobs.company_id = ?", applicationID, companyID).
+		Preload("Job").
 		First(&application).Error
 
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Application not found"})
 		return
 	}
+
+	// Store old status for logging
+	oldStatus := application.Status
 
 	now := time.Now()
 	application.Status = "rejected"
@@ -236,6 +255,16 @@ func RejectApplication(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update application"})
 		return
 	}
+
+	// Log application rejection
+	companyUUID, _ := uuid.Parse(companyID)
+	adminIDVal, _ := c.Get("admin_id")
+	adminIDStr, _ := adminIDVal.(string)
+	adminUUID, _ := uuid.Parse(adminIDStr)
+	applicationUUID, _ := uuid.Parse(applicationID)
+	jobTitle := application.Job.Title
+
+	services.LogApplicationStatusChanged(companyUUID, adminUUID, applicationUUID, application.FullName, jobTitle, oldStatus, "rejected")
 
 	// Send rejection email (async with error logging)
 	go func() {

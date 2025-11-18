@@ -63,6 +63,9 @@ export default function DashboardLayout({
                   Applications
                 </NavLink>
                 <NavLink href="/admin/dashboard/embed">Embed Code</NavLink>
+                <NavLink href="/admin/dashboard/activity-logs">
+                  Activity Logs
+                </NavLink>
               </div>
             </div>
             <div className="flex items-center space-x-4">

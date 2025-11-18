@@ -42,6 +42,9 @@ func SetupRoutes(router *gin.Engine) {
 			// AI Shortlisting routes
 			protected.POST("/applications/ai-shortlist", controllers.AIShortlistApplication)
 			protected.POST("/applications/ai-shortlist-batch", controllers.BatchAIShortlist)
+			
+			// Activity Logs routes
+			protected.GET("/activity-logs", controllers.GetActivityLogs)
 		}
 
 		// Super Admin protected routes
@@ -50,6 +53,7 @@ func SetupRoutes(router *gin.Engine) {
 		{
 			superAdmin.GET("/stats", controllers.GetSuperAdminStats)
 			superAdmin.GET("/companies", controllers.GetAllCompanies)
+			superAdmin.GET("/activity-logs", controllers.GetSuperAdminActivityLogs)
 		}
 	}
 }

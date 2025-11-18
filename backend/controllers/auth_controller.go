@@ -3,6 +3,7 @@ package controllers
 import (
 	"ats-backend/config"
 	"ats-backend/models"
+	"ats-backend/services"
 	"ats-backend/utils"
 	"net/http"
 	"time"
@@ -120,6 +121,9 @@ func Register(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create admin"})
 		return
 	}
+
+	// Log company registration
+	services.LogCompanyRegistered(company.ID, company.CompanyName, admin.Email)
 
 	// Generate token
 	token, err := utils.GenerateJWT(admin.ID.String(), admin.CompanyID.String())

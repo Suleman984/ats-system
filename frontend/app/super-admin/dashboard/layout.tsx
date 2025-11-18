@@ -44,6 +44,9 @@ export default function SuperAdminDashboardLayout({
                 <NavLink href="/super-admin/dashboard/companies">
                   Companies
                 </NavLink>
+                <NavLink href="/super-admin/dashboard/activity-logs">
+                  Activity Logs
+                </NavLink>
               </div>
             </div>
             <div className="flex items-center space-x-4">

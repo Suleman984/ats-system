@@ -3,6 +3,7 @@ package controllers
 import (
 	"ats-backend/config"
 	"ats-backend/models"
+	"ats-backend/services"
 	"log"
 	"net/http"
 	"strings"
@@ -128,6 +129,14 @@ func CreateJob(c *gin.Context) {
 		return
 	}
 
+	// Get admin ID from context
+	adminIDVal, _ := c.Get("admin_id")
+	adminIDStr, _ := adminIDVal.(string)
+	adminID, _ := uuid.Parse(adminIDStr)
+
+	// Log job creation
+	services.LogJobCreated(companyID, adminID, job.ID, job.Title)
+
 	c.JSON(http.StatusCreated, gin.H{
 		"message": "Job created successfully",
 		"job":     job,
@@ -208,6 +217,15 @@ func UpdateJob(c *gin.Context) {
 		return
 	}
 
+	// Store old values for logging
+	oldStatus := job.Status
+	oldTitle := job.Title
+	jobUUID, _ := uuid.Parse(jobID)
+	companyUUID, _ := uuid.Parse(companyID)
+	adminIDVal, _ := c.Get("admin_id")
+	adminIDStr, _ := adminIDVal.(string)
+	adminUUID, _ := uuid.Parse(adminIDStr)
+
 	var jobRequest struct {
 		Title            string `json:"title"`
 		Description      string `json:"description"`
@@ -277,6 +295,22 @@ func UpdateJob(c *gin.Context) {
 		return
 	}
 
+	// Log job update - check if status changed or other fields
+	changes := make(map[string]interface{})
+	if jobRequest.Status != "" && jobRequest.Status != oldStatus {
+		services.LogJobStatusChanged(companyUUID, adminUUID, jobUUID, job.Title, oldStatus, job.Status)
+	} else {
+		// Log general update
+		if jobRequest.Title != "" && jobRequest.Title != oldTitle {
+			changes["title"] = map[string]interface{}{"old": oldTitle, "new": jobRequest.Title}
+		}
+		if len(changes) > 0 {
+			services.LogJobUpdated(companyUUID, adminUUID, jobUUID, job.Title, changes)
+		} else {
+			services.LogJobUpdated(companyUUID, adminUUID, jobUUID, job.Title, map[string]interface{}{"updated": true})
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Job updated successfully",
 		"job":     job,
@@ -298,10 +332,21 @@ func DeleteJob(c *gin.Context) {
 		return
 	}
 
+	// Store job details for logging before deletion
+	jobTitle := job.Title
+	jobUUID, _ := uuid.Parse(jobID)
+	companyUUID, _ := uuid.Parse(companyID)
+	adminIDVal, _ := c.Get("admin_id")
+	adminIDStr, _ := adminIDVal.(string)
+	adminUUID, _ := uuid.Parse(adminIDStr)
+
 	if err := config.DB.Delete(&job).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete job"})
 		return
 	}
+
+	// Log job deletion
+	services.LogJobDeleted(companyUUID, adminUUID, jobUUID, jobTitle)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Job deleted successfully"})
 }
