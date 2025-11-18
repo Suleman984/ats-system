@@ -1,7 +1,9 @@
 package utils
 
 import (
+	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"time"
 
@@ -63,6 +65,10 @@ func VerifyJWT(tokenString string) (*Claims, error) {
 	}
 
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		// Check signing method
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
 		return []byte(secret), nil
 	})
 
@@ -71,6 +77,15 @@ func VerifyJWT(tokenString string) (*Claims, error) {
 	}
 
 	if claims, ok := token.Claims.(*Claims); ok && token.Valid {
+		// Debug: Log what we extracted
+		log.Printf("VerifyJWT: Successfully parsed claims - AdminID: '%s', CompanyID: '%s'", claims.AdminID, claims.CompanyID)
+		
+		// Debug: Check raw claims map
+		if claimsMap, ok := token.Claims.(jwt.MapClaims); ok {
+			claimsJSON, _ := json.Marshal(claimsMap)
+			log.Printf("VerifyJWT: Raw claims map: %s", string(claimsJSON))
+		}
+		
 		return claims, nil
 	}
 

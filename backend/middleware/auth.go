@@ -28,6 +28,13 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		token := parts[1]
 
+		// Log token (first 20 chars only for security)
+		if len(token) > 20 {
+			log.Printf("AuthMiddleware: Received token (first 20 chars): %s...", token[:20])
+		} else {
+			log.Printf("AuthMiddleware: Received token: %s", token)
+		}
+
 		// Verify token
 		claims, err := utils.VerifyJWT(token)
 		if err != nil {
@@ -39,6 +46,11 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		// Log extracted claims for debugging
 		log.Printf("AuthMiddleware: Extracted claims - AdminID: '%s', CompanyID: '%s'", claims.AdminID, claims.CompanyID)
+		
+		// Debug: Check if claims are actually populated
+		if claims.AdminID == "" && claims.CompanyID == "" {
+			log.Printf("AuthMiddleware: WARNING - Both AdminID and CompanyID are empty! Token might be invalid or using wrong secret.")
+		}
 
 		// Validate claims are not empty
 		if claims.AdminID == "" {
