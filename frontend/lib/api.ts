@@ -174,6 +174,45 @@ export const activityLogAPI = {
     }),
 };
 
+// Candidate Search Types
+export interface CandidateSearchRequest {
+  query?: string;
+  skills?: string[];
+  min_experience?: number;
+  max_experience?: number;
+  current_position?: string;
+  languages?: string[];
+  has_portfolio?: boolean;
+  has_linkedin?: boolean;
+  status?: string;
+  limit?: number;
+}
+
+export interface CandidateSearchResult {
+  application: Application;
+  match_score: number;
+  matched_skills: string[];
+  matched_reasons: string[];
+}
+
+export interface CandidateDetails {
+  candidate: Application;
+  cv_text: string;
+  skills: string[];
+  experience: number;
+}
+
+// Candidate Search APIs
+export const candidateSearchAPI = {
+  search: (data: CandidateSearchRequest) =>
+    api.post<{
+      candidates: CandidateSearchResult[];
+      count: number;
+      total: number;
+    }>("/candidates/search", data),
+  getDetails: (id: string) => api.get<CandidateDetails>(`/candidates/${id}`),
+};
+
 export const superAdminActivityLogAPI = {
   getAll: (params?: {
     company_id?: string;

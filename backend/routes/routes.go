@@ -45,6 +45,10 @@ func SetupRoutes(router *gin.Engine) {
 			
 			// Activity Logs routes
 			protected.GET("/activity-logs", controllers.GetActivityLogs)
+			
+			// Candidate Search routes
+			protected.POST("/candidates/search", controllers.SearchCandidates)
+			protected.GET("/candidates/:id", controllers.GetCandidateDetails)
 		}
 
 		// Super Admin protected routes

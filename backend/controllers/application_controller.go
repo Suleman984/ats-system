@@ -47,6 +47,21 @@ func SubmitApplication(c *gin.Context) {
 		return
 	}
 
+	// Parse and store CV text for future searching (async)
+	go func() {
+		if application.ResumeURL != "" {
+			log.Printf("Parsing CV text for application %s", application.ID.String())
+			cvText, err := services.ExtractTextFromURL(application.ResumeURL)
+			if err == nil && len(cvText) > 50 {
+				application.ParsedCVText = &cvText
+				config.DB.Model(&application).Update("parsed_cv_text", cvText)
+				log.Printf("CV text parsed and stored for %s (%d characters)", application.FullName, len(cvText))
+			} else {
+				log.Printf("Failed to parse CV text for %s: %v", application.Email, err)
+			}
+		}
+	}()
+
 	// Automatically analyze CV and calculate score if job has criteria (async)
 	// Note: We only calculate score, admin decides whether to shortlist
 	go func() {

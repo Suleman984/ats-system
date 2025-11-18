@@ -62,6 +62,9 @@ export default function DashboardLayout({
                 <NavLink href="/admin/dashboard/applications">
                   Applications
                 </NavLink>
+                <NavLink href="/admin/dashboard/find-candidates">
+                  Find Candidates
+                </NavLink>
                 <NavLink href="/admin/dashboard/embed">Embed Code</NavLink>
                 <NavLink href="/admin/dashboard/activity-logs">
                   Activity Logs

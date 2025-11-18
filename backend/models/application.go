@@ -21,6 +21,7 @@ type Application struct {
 	Status             string     `gorm:"size:50;default:'pending'" json:"status"`
 	Score              int        `gorm:"default:0" json:"score"` // AI match score 0-100
 	AnalysisResult     *string    `gorm:"type:jsonb" json:"analysis_result,omitempty"` // AI analysis JSON
+	ParsedCVText       *string    `gorm:"type:text" json:"parsed_cv_text,omitempty"` // Extracted CV text for searching
 	AppliedAt          time.Time  `json:"applied_at"`
 	ReviewedAt         *time.Time `json:"reviewed_at,omitempty"`
 	ReviewedBy         *uuid.UUID `gorm:"type:uuid" json:"reviewed_by,omitempty"`
