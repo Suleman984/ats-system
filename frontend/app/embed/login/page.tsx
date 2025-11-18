@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { authAPI } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
 
 export default function EmbeddedLoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const login = useAuthStore((state) => state.login);
   const [formData, setFormData] = useState({
     email: "",
@@ -15,6 +16,9 @@ export default function EmbeddedLoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
+
+  // Get company_id from URL
+  const urlCompanyId = searchParams.get("company_id");
 
   useEffect(() => {
     setMounted(true);
@@ -27,8 +31,24 @@ export default function EmbeddedLoginPage() {
 
     try {
       const response = await authAPI.login(formData);
+      const loggedInCompanyId = response.data.admin.company_id;
+
+      // Validate company_id if provided in URL
+      if (urlCompanyId && loggedInCompanyId !== urlCompanyId) {
+        setError(
+          "This login does not match the embed code. Please use the correct embed code for your company."
+        );
+        setLoading(false);
+        return;
+      }
+
       login(response.data.admin, response.data.token);
-      router.push("/embed/dashboard");
+
+      // Redirect to dashboard with company_id
+      const redirectUrl = urlCompanyId
+        ? `/embed/dashboard?company_id=${urlCompanyId}`
+        : `/embed/dashboard?company_id=${loggedInCompanyId}`;
+      router.push(redirectUrl);
     } catch (err: any) {
       setError(err.response?.data?.error || "Login failed");
     } finally {

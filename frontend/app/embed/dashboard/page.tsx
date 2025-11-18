@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthStore } from "@/lib/store";
 import { jobAPI, applicationAPI, Application } from "@/lib/api";
 
 export default function EmbeddedDashboardPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isAuthenticated, user } = useAuthStore();
   const [stats, setStats] = useState({
     totalJobs: 0,
@@ -18,16 +19,41 @@ export default function EmbeddedDashboardPage() {
     []
   );
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  // Get company_id from URL
+  const urlCompanyId = searchParams.get("company_id");
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      router.push("/embed/login");
+    // Validate company_id is present in URL
+    if (!urlCompanyId) {
+      setError(
+        "Invalid embed code: Company ID is missing. Please use the embed code from your dashboard."
+      );
+      setLoading(false);
       return;
     }
-    if (isAuthenticated) {
+
+    // If not authenticated, redirect to login with company_id
+    if (!isAuthenticated) {
+      router.push(`/embed/login?company_id=${urlCompanyId}`);
+      return;
+    }
+
+    // Validate that logged-in user's company_id matches URL company_id
+    if (user?.company_id !== urlCompanyId) {
+      setError(
+        "Security Error: The embed code does not match your account. Please log out and use the correct embed code from your dashboard."
+      );
+      setLoading(false);
+      return;
+    }
+
+    // All validations passed, fetch dashboard data
+    if (isAuthenticated && user?.company_id === urlCompanyId) {
       fetchDashboardData();
     }
-  }, [isAuthenticated, router]);
+  }, [isAuthenticated, user, urlCompanyId, router]);
 
   const fetchDashboardData = async () => {
     try {
@@ -57,6 +83,26 @@ export default function EmbeddedDashboardPage() {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-gray-600">Loading...</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-64 p-4">
+        <div className="bg-red-50 border border-red-200 rounded-lg p-6 max-w-md">
+          <h3 className="text-red-800 font-bold mb-2">⚠️ Security Error</h3>
+          <p className="text-red-700 text-sm mb-4">{error}</p>
+          <button
+            onClick={() => {
+              useAuthStore.getState().logout();
+              router.push(`/embed/login?company_id=${urlCompanyId || ""}`);
+            }}
+            className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-red-700"
+          >
+            Go to Login
+          </button>
+        </div>
       </div>
     );
   }

@@ -19,9 +19,9 @@ export default function EmbedPage() {
   frameborder="0">
 </iframe>`;
 
-  // Full Dashboard Embed Code (new)
+  // Full Dashboard Embed Code (new) - includes company_id for security
   const dashboardEmbedCode = `<iframe
-  src="${frontendUrl}/embed/dashboard"
+  src="${frontendUrl}/embed/dashboard?company_id=${user?.company_id}"
   width="100%"
   height="900px"
   frameborder="0"
@@ -63,9 +63,20 @@ export default function EmbedPage() {
           </div>
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
             <p className="text-xs text-yellow-800">
-              <strong>Note:</strong> Users will need to log in within the
-              embedded iframe. Make sure the iframe height is sufficient
-              (recommended: 900px or more).
+              <strong>Security Note:</strong> This embed code is unique to your
+              company. The company ID is included in the URL to ensure only
+              authorized access. Users will need to log in within the embedded
+              iframe. Make sure the iframe height is sufficient (recommended:
+              900px or more).
+            </p>
+          </div>
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+            <p className="text-xs text-blue-800">
+              <strong>🔒 Security:</strong> Each company has a unique embed
+              code. If someone copies your embed code, they will only see the
+              login page, and only users from your company can successfully log
+              in. The system validates that the logged-in user belongs to the
+              company specified in the embed URL.
             </p>
           </div>
           <div className="space-y-3">

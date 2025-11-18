@@ -1,7 +1,7 @@
 "use client";
 
 import { useAuthStore } from "@/lib/store";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 
@@ -14,7 +14,11 @@ export default function EmbeddedDashboardLayout({
   const { isAuthenticated, user, logout, checkAuth, initialized } =
     useAuthStore();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [mounted, setMounted] = useState(false);
+
+  // Get company_id from URL to preserve it in navigation
+  const urlCompanyId = searchParams.get("company_id");
 
   useEffect(() => {
     setMounted(true);
@@ -23,10 +27,23 @@ export default function EmbeddedDashboardLayout({
 
   useEffect(() => {
     if (mounted && initialized && !isAuthenticated) {
-      // In embedded mode, redirect to login within the iframe
-      router.push("/embed/login");
+      // In embedded mode, redirect to login within the iframe with company_id
+      const loginUrl = urlCompanyId
+        ? `/embed/login?company_id=${urlCompanyId}`
+        : "/embed/login";
+      router.push(loginUrl);
     }
-  }, [isAuthenticated, initialized, mounted, router]);
+  }, [isAuthenticated, initialized, mounted, router, urlCompanyId]);
+
+  // Helper to add company_id to URLs
+  const getUrlWithCompanyId = (path: string) => {
+    if (urlCompanyId) {
+      return `${path}${
+        path.includes("?") ? "&" : "?"
+      }company_id=${urlCompanyId}`;
+    }
+    return path;
+  };
 
   if (!mounted || !initialized || !isAuthenticated) {
     return (
@@ -47,9 +64,15 @@ export default function EmbeddedDashboardLayout({
                 {user?.name || "ATS Dashboard"}
               </span>
               <div className="hidden md:flex space-x-3">
-                <NavLink href="/embed/dashboard">Dashboard</NavLink>
-                <NavLink href="/embed/dashboard/jobs">Jobs</NavLink>
-                <NavLink href="/embed/dashboard/applications">
+                <NavLink href={getUrlWithCompanyId("/embed/dashboard")}>
+                  Dashboard
+                </NavLink>
+                <NavLink href={getUrlWithCompanyId("/embed/dashboard/jobs")}>
+                  Jobs
+                </NavLink>
+                <NavLink
+                  href={getUrlWithCompanyId("/embed/dashboard/applications")}
+                >
                   Applications
                 </NavLink>
               </div>
