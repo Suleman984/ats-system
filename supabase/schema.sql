@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS applications (
     portfolio_url VARCHAR(255),
     status VARCHAR(50) DEFAULT 'pending', -- pending, shortlisted, rejected, interviewed
     score INT DEFAULT 0, -- auto-calculated score for shortlisting
+    analysis_result JSONB, -- AI analysis JSON
+    parsed_cv_text TEXT, -- Extracted CV text for searching
     applied_at TIMESTAMP DEFAULT NOW(),
     reviewed_at TIMESTAMP,
     reviewed_by UUID REFERENCES admins(id)
