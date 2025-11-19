@@ -10,6 +10,7 @@ export default function JobsPage() {
   const [filterStatus, setFilterStatus] = useState("");
 
   useEffect(() => {
+    // fetch jobs
     fetchJobs();
   }, [filterStatus]);
 
