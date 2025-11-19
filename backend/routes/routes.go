@@ -53,6 +53,9 @@ func SetupRoutes(router *gin.Engine) {
 			// Candidate Search routes
 			protected.POST("/candidates/search", controllers.SearchCandidates)
 			protected.GET("/candidates/:id", controllers.GetCandidateDetails)
+			
+			// Manual Candidate routes
+			protected.POST("/candidates/manual", controllers.AddManualCandidate)
 		}
 
 		// Super Admin protected routes

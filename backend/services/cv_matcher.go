@@ -62,15 +62,22 @@ func ExtractTextFromURL(cvURL string) (string, error) {
 		return string(fileBytes), nil
 	}
 	
-	// For PDFs - extract text (simple approach: look for readable text)
+	// For PDFs - extract text (enhanced approach: multiple extraction methods)
 	if strings.Contains(contentType, "pdf") || strings.HasSuffix(cvURL, ".pdf") {
-		// Simple PDF text extraction - extract readable ASCII text
+		// Enhanced PDF text extraction - try multiple methods
 		text := extractTextFromPDF(fileBytes)
+		
+		// If first method didn't work well, try fallback
+		if len(text) < 100 {
+			// Try extracting readable text from entire file
+			text = extractReadableText(fileBytes)
+		}
+		
 		if len(text) > 100 {
 			return text, nil
 		}
-		// If extraction fails, return error
-		return "", fmt.Errorf("could not extract text from PDF. Please ensure PDF contains readable text.")
+		// If extraction fails, return error with helpful message
+		return "", fmt.Errorf("could not extract text from PDF. Please ensure PDF contains readable text (not scanned images). For scanned PDFs, consider using OCR tools first.")
 	}
 	
 	// For DOCX - try to extract text
@@ -98,7 +105,7 @@ func ExtractTextFromURL(cvURL string) (string, error) {
 		return text, nil
 	}
 	
-	return "", fmt.Errorf("could not extract readable text from CV file. Supported formats: PDF, DOC, DOCX, TXT")
+	return "", fmt.Errorf("could not extract readable text from CV file. Supported formats: PDF (with readable text), DOC, DOCX, TXT. For scanned images, please convert to text first.")
 }
 
 // extractTextFromPDF extracts text from PDF bytes (simple approach)
@@ -139,15 +146,35 @@ func extractTextFromPDF(data []byte) string {
 func extractTextFromDOCX(data []byte) string {
 	// DOCX is a ZIP file containing XML
 	// Look for document.xml content
-	// Simple approach: extract readable text from XML
+	// Enhanced approach: extract readable text from XML with better patterns
 	text := ""
 	
-	// Look for text in XML tags
-	xmlTextRegex := regexp.MustCompile(`<w:t[^>]*>([^<]+)</w:t>`)
-	matches := xmlTextRegex.FindAllStringSubmatch(string(data), -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			text += match[1] + " "
+	// Look for text in XML tags - multiple patterns for better extraction
+	xmlPatterns := []*regexp.Regexp{
+		regexp.MustCompile(`<w:t[^>]*>([^<]+)</w:t>`),           // Standard Word text
+		regexp.MustCompile(`<t[^>]*>([^<]+)</t>`),              // Alternative text tag
+		regexp.MustCompile(`<text[^>]*>([^<]+)</text>`),        // Generic text tag
+		regexp.MustCompile(`xml:space="preserve">([^<]+)</w:t>`), // Preserved space text
+	}
+	
+	for _, pattern := range xmlPatterns {
+		matches := pattern.FindAllStringSubmatch(string(data), -1)
+		for _, match := range matches {
+			if len(match) > 1 {
+				text += match[1] + " "
+			}
+		}
+	}
+	
+	// Also try to extract from raw XML if patterns didn't work well
+	if len(text) < 100 {
+		// Fallback: extract any readable text between tags
+		fallbackPattern := regexp.MustCompile(`>([A-Za-z0-9\s\.\,\:\;\!\?\-]+)<`)
+		matches := fallbackPattern.FindAllStringSubmatch(string(data), -1)
+		for _, match := range matches {
+			if len(match) > 1 && len(match[1]) > 2 {
+				text += match[1] + " "
+			}
 		}
 	}
 	
@@ -258,19 +285,18 @@ func ExtractExperience(cvText string) int {
 	return maxYears
 }
 
-// ExtractSkills extracts skills from CV text
+// ExtractSkills extracts skills from CV text with synonym recognition and inference
 func ExtractSkills(cvText string, requiredSkills []string) []string {
 	foundSkills := []string{}
 	cvLower := strings.ToLower(cvText)
 	
-	// Normalize skill names for matching
-	normalizeSkill := func(skill string) string {
-		return strings.ToLower(strings.TrimSpace(skill))
-	}
+	// Extract job title from CV for skills inference
+	jobTitle := extractJobTitleFromCV(cvText)
+	inferredSkills := InferSkillsFromJobTitle(jobTitle)
 	
-	// Check each required skill
+	// Check each required skill with synonym matching
 	for _, skill := range requiredSkills {
-		normalizedSkill := normalizeSkill(skill)
+		normalizedSkill := NormalizeSkill(skill)
 		
 		// Direct match
 		if strings.Contains(cvLower, normalizedSkill) {
@@ -285,12 +311,44 @@ func ExtractSkills(cvText string, requiredSkills []string) []string {
 			continue
 		}
 		
+		// Try synonym matching
+		synonyms := GetSkillSynonyms(skill)
+		matched := false
+		for _, synonym := range synonyms {
+			synonymNormalized := NormalizeSkill(synonym)
+			if strings.Contains(cvLower, synonymNormalized) {
+				foundSkills = append(foundSkills, skill)
+				matched = true
+				break
+			}
+			// Try word boundary for synonyms too
+			synonymRegex := regexp.MustCompile(`\b` + regexp.QuoteMeta(synonymNormalized) + `\b`)
+			if synonymRegex.MatchString(cvLower) {
+				foundSkills = append(foundSkills, skill)
+				matched = true
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+		
 		// Try partial match for compound skills (e.g., "React.js" matches "React")
 		skillWords := strings.Fields(normalizedSkill)
 		if len(skillWords) > 0 {
 			firstWord := skillWords[0]
 			if len(firstWord) > 3 && strings.Contains(cvLower, firstWord) {
 				foundSkills = append(foundSkills, skill)
+				continue
+			}
+		}
+		
+		// Try skills inference - if required skill matches inferred skills
+		for _, inferred := range inferredSkills {
+			if strings.Contains(strings.ToLower(inferred), normalizedSkill) || 
+			   strings.Contains(normalizedSkill, strings.ToLower(inferred)) {
+				foundSkills = append(foundSkills, skill)
+				break
 			}
 		}
 	}
@@ -304,12 +362,58 @@ func ExtractSkills(cvText string, requiredSkills []string) []string {
 	}
 	
 	for _, skill := range commonSkills {
-		if strings.Contains(cvLower, skill) && !contains(foundSkills, skill) {
-			foundSkills = append(foundSkills, skill)
+		skillLower := strings.ToLower(skill)
+		if strings.Contains(cvLower, skillLower) && !contains(foundSkills, skill) {
+			// Check synonyms too
+			synonyms := GetSkillSynonyms(skill)
+			hasSynonym := false
+			for _, synonym := range synonyms {
+				if strings.Contains(cvLower, strings.ToLower(synonym)) {
+					hasSynonym = true
+					break
+				}
+			}
+			if hasSynonym || strings.Contains(cvLower, skillLower) {
+				foundSkills = append(foundSkills, skill)
+			}
+		}
+	}
+	
+	// Add inferred skills from job title (if not already found)
+	for _, inferred := range inferredSkills {
+		if !contains(foundSkills, inferred) {
+			inferredLower := strings.ToLower(inferred)
+			if strings.Contains(cvLower, inferredLower) {
+				foundSkills = append(foundSkills, inferred)
+			}
 		}
 	}
 	
 	return foundSkills
+}
+
+// extractJobTitleFromCV extracts job title from CV text
+func extractJobTitleFromCV(cvText string) string {
+	cvLower := strings.ToLower(cvText)
+	
+	// Look for common job title patterns
+	titlePatterns := []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(?:position|role|title|job)[:\s]+([a-z\s]+(?:developer|engineer|manager|analyst|designer|lead|architect))`),
+		regexp.MustCompile(`(?i)(senior|junior|mid-level)?\s*([a-z\s]+(?:developer|engineer|manager|analyst|designer|lead|architect))`),
+		regexp.MustCompile(`(?i)([a-z\s]+(?:developer|engineer|manager|analyst|designer|lead|architect))`),
+	}
+	
+	for _, pattern := range titlePatterns {
+		matches := pattern.FindStringSubmatch(cvText)
+		if len(matches) > 1 {
+			title := strings.TrimSpace(matches[1])
+			if len(title) > 3 && len(title) < 50 {
+				return title
+			}
+		}
+	}
+	
+	return ""
 }
 
 // ExtractLanguages extracts languages from CV text

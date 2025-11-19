@@ -211,6 +211,24 @@ export const candidateSearchAPI = {
       total: number;
     }>("/candidates/search", data),
   getDetails: (id: string) => api.get<CandidateDetails>(`/candidates/${id}`),
+  addManual: (data: {
+    job_id: string;
+    full_name: string;
+    email: string;
+    phone?: string;
+    resume_url: string;
+    cover_letter?: string;
+    years_of_experience?: number;
+    current_position?: string;
+    linkedin_url?: string;
+    portfolio_url?: string;
+    status?: string;
+    notes?: string;
+  }) =>
+    api.post<{ message: string; application: Application }>(
+      "/candidates/manual",
+      data
+    ),
 };
 
 export const superAdminActivityLogAPI = {
