@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import ModeIndicator from "@/components/ModeIndicator";
+import ToastContainer from "@/components/Toast";
 
 export const metadata: Metadata = {
   title: "ATS Platform - Applicant Tracking System",
@@ -16,6 +17,7 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <ModeIndicator />
+        <ToastContainer />
         <div className="pt-7">{children}</div>
       </body>
     </html>

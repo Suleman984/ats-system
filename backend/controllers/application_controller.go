@@ -62,35 +62,60 @@ func SubmitApplication(c *gin.Context) {
 		}
 	}()
 
-	// Automatically analyze CV and calculate score if job has criteria (async)
+	// Automatically analyze CV and calculate score (async)
 	// Note: We only calculate score, admin decides whether to shortlist
 	go func() {
+		log.Printf("Starting CV analysis for application %s (Job: %s)", application.ID.String(), job.Title)
+		
+		var criteria services.Criteria
+		
+		// Try to use job's shortlist criteria if available
 		if job.ShortlistCriteria != nil && *job.ShortlistCriteria != "" {
-			log.Printf("Auto-analyzing CV for application %s", application.ID.String())
-			
-			var criteria services.Criteria
-			if err := json.Unmarshal([]byte(*job.ShortlistCriteria), &criteria); err == nil {
+			log.Printf("Using job's shortlist criteria for application %s", application.ID.String())
+			if err := json.Unmarshal([]byte(*job.ShortlistCriteria), &criteria); err != nil {
+				log.Printf("WARNING: Failed to parse job's shortlist criteria for application %s: %v. Using default criteria.", application.ID.String(), err)
+				// Fall through to use default criteria
+			} else {
 				criteria.JobDescription = job.Description
 				criteria.JobRequirements = job.Requirements
-				
-				// Analyze CV
-				analysisResult, err := services.MatchCVFromURL(application.ResumeURL, criteria, job.Title)
-				if err != nil {
-					log.Printf("Failed to auto-analyze CV for %s: %v", application.Email, err)
-					return
-				}
-				
-				// Update application with score (but don't auto-shortlist)
-				application.Score = analysisResult.MatchScore
-				analysisJSON, _ := json.Marshal(analysisResult)
-				analysisJSONStr := string(analysisJSON)
-				application.AnalysisResult = &analysisJSONStr
-				
-				// Save updated application with score
-				config.DB.Save(&application)
-				log.Printf("CV analyzed for %s: Score=%d%% (Admin can review and shortlist manually)", application.FullName, analysisResult.MatchScore)
+			}
+		} else {
+			log.Printf("No shortlist criteria set for job '%s'. Using default criteria for basic analysis.", job.Title)
+			// Use default criteria: analyze based on job description and requirements
+			criteria = services.Criteria{
+				RequiredSkills:      []string{}, // Will extract from job description
+				MinExperience:       0,          // Will extract from job description
+				RequiredLanguages:   []string{},
+				MatchJobDescription: true,
+				JobDescription:      job.Description,
+				JobRequirements:     job.Requirements,
 			}
 		}
+		
+		// Analyze CV
+		log.Printf("Analyzing CV for %s (Email: %s)", application.FullName, application.Email)
+		analysisResult, err := services.MatchCVFromURL(application.ResumeURL, criteria, job.Title)
+		if err != nil {
+			log.Printf("ERROR: Failed to auto-analyze CV for %s (Email: %s, Application ID: %s): %v", 
+				application.FullName, application.Email, application.ID.String(), err)
+			log.Printf("CV URL: %s", application.ResumeURL)
+			return
+		}
+		
+		// Update application with score (but don't auto-shortlist)
+		application.Score = analysisResult.MatchScore
+		analysisJSON, _ := json.Marshal(analysisResult)
+		analysisJSONStr := string(analysisJSON)
+		application.AnalysisResult = &analysisJSONStr
+		
+		// Save updated application with score
+		if err := config.DB.Save(&application).Error; err != nil {
+			log.Printf("ERROR: Failed to save analysis result for application %s: %v", application.ID.String(), err)
+			return
+		}
+		
+		log.Printf("SUCCESS: CV analyzed for %s (Email: %s, Application ID: %s): Score=%d%% (Admin can review and shortlist manually)", 
+			application.FullName, application.Email, application.ID.String(), analysisResult.MatchScore)
 	}()
 
 	// Send confirmation email (async with error logging)

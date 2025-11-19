@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { applicationAPI, jobAPI, Application, Job } from "@/lib/api";
+import {
+  applicationAPI,
+  jobAPI,
+  aiShortlistAPI,
+  Application,
+  Job,
+} from "@/lib/api";
+import { toast } from "@/components/Toast";
 
 export default function ApplicationsPage() {
   const [applications, setApplications] = useState<Application[]>([]);
@@ -13,6 +20,7 @@ export default function ApplicationsPage() {
   const [loading, setLoading] = useState(true);
   const [isFiltering, setIsFiltering] = useState(false);
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
+  const [analyzingApps, setAnalyzingApps] = useState<Set<string>>(new Set());
 
   const fetchData = useCallback(
     async (skipFilters = false) => {
@@ -69,24 +77,79 @@ export default function ApplicationsPage() {
   }, [selectedJob, selectedStatus, dateFrom, dateTo, loading, fetchData]);
 
   const handleShortlist = async (id: string) => {
-    if (!confirm("Shortlist this candidate?")) return;
+    if (!window.confirm("Shortlist this candidate?")) return;
     try {
       await applicationAPI.shortlist(id);
-      alert("Candidate shortlisted! Email sent.");
+      toast.success("Candidate shortlisted! Email sent.");
       fetchData();
     } catch (error) {
-      alert("Failed to shortlist candidate");
+      toast.error("Failed to shortlist candidate");
     }
   };
 
   const handleReject = async (id: string) => {
-    if (!confirm("Reject this candidate?")) return;
+    if (!window.confirm("Reject this candidate?")) return;
     try {
       await applicationAPI.reject(id);
-      alert("Candidate rejected. Email sent.");
+      toast.success("Candidate rejected. Email sent.");
       fetchData();
     } catch (error) {
-      alert("Failed to reject candidate");
+      toast.error("Failed to reject candidate");
+    }
+  };
+
+  const handleAnalyzeCV = async (app: Application) => {
+    // Add to analyzing set
+    setAnalyzingApps((prev) => new Set(prev).add(app.id));
+    setOpenDropdown(null);
+
+    try {
+      // Find the job for this application to get job details
+      const job = jobs.find((j) => j.id === app.job_id);
+      if (!job) {
+        toast.error("Job not found for this application");
+        return;
+      }
+
+      // Call AI analysis endpoint with empty criteria (will use job description/requirements)
+      const response = await aiShortlistAPI.analyze({
+        application_id: app.id,
+        required_skills: [],
+        min_experience: 0,
+        required_languages: [],
+        match_job_description: true,
+      });
+
+      // Update the application in the local state
+      setApplications((prevApps) =>
+        prevApps.map((a) =>
+          a.id === app.id
+            ? {
+                ...a,
+                score: response.data.analysis.match_score,
+                analysis_result: response.data.analysis,
+              }
+            : a
+        )
+      );
+
+      toast.success(
+        `CV analyzed successfully! Match Score: ${response.data.analysis.match_score}%`
+      );
+    } catch (error: any) {
+      console.error("Failed to analyze CV:", error);
+      toast.error(
+        error.response?.data?.error ||
+          error.response?.data?.details ||
+          "Failed to analyze CV. Please try again."
+      );
+    } finally {
+      // Remove from analyzing set
+      setAnalyzingApps((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(app.id);
+        return newSet;
+      });
     }
   };
 
@@ -372,9 +435,30 @@ export default function ApplicationsPage() {
                                     💼 LinkedIn
                                   </a>
                                 )}
+                                <div className="border-t border-gray-200 my-1"></div>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleAnalyzeCV(app);
+                                  }}
+                                  disabled={analyzingApps.has(app.id)}
+                                  className={`block w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                                    analyzingApps.has(app.id)
+                                      ? "text-gray-400 cursor-not-allowed"
+                                      : "text-blue-600 hover:bg-gray-50"
+                                  }`}
+                                >
+                                  {analyzingApps.has(app.id) ? (
+                                    <span className="flex items-center gap-1">
+                                      <span className="inline-block w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></span>
+                                      Analyzing...
+                                    </span>
+                                  ) : (
+                                    "🔍 Analyze CV"
+                                  )}
+                                </button>
                                 {app.status === "pending" && (
                                   <>
-                                    <div className="border-t border-gray-200 my-1"></div>
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();

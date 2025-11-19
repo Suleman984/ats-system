@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { applicationAPI, jobAPI, uploadAPI, Job } from "@/lib/api";
+import { toast } from "@/components/Toast";
 
 export default function ApplyPage() {
   const params = useParams();
@@ -12,6 +13,8 @@ export default function ApplyPage() {
   const [loading, setLoading] = useState(false);
   const [uploadingCV, setUploadingCV] = useState(false);
   const [uploadingPortfolio, setUploadingPortfolio] = useState(false);
+  const [cvUploadMessage, setCvUploadMessage] = useState("");
+  const [portfolioUploadMessage, setPortfolioUploadMessage] = useState("");
   const cvFileRef = useRef<HTMLInputElement>(null);
   const portfolioFileRef = useRef<HTMLInputElement>(null);
   const [formData, setFormData] = useState({
@@ -53,23 +56,30 @@ export default function ApplyPage() {
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ];
     if (!allowedTypes.includes(file.type)) {
-      alert("Invalid file type. Please upload PDF, DOC, or DOCX files only.");
+      setCvUploadMessage("");
+      toast.error(
+        "Invalid file type. Please upload PDF, DOC, or DOCX files only."
+      );
       return;
     }
 
     // Validate file size (10MB)
     if (file.size > 10 * 1024 * 1024) {
-      alert("File size exceeds 10MB limit.");
+      setCvUploadMessage("");
+      toast.error("File size exceeds 10MB limit.");
       return;
     }
 
     setUploadingCV(true);
+    setCvUploadMessage("");
     try {
       const response = await uploadAPI.uploadCV(file);
       setFormData({ ...formData, resume_url: response.data.file_url });
-      alert("CV uploaded successfully!");
+      setCvUploadMessage("✓ CV uploaded successfully!");
+      setTimeout(() => setCvUploadMessage(""), 5000); // Clear message after 5 seconds
     } catch (error: any) {
-      alert(error.response?.data?.error || "Failed to upload CV");
+      setCvUploadMessage("");
+      toast.error(error.response?.data?.error || "Failed to upload CV");
     } finally {
       setUploadingCV(false);
     }
@@ -89,7 +99,8 @@ export default function ApplyPage() {
       "application/x-7z-compressed",
     ];
     if (!allowedTypes.includes(file.type)) {
-      alert(
+      setPortfolioUploadMessage("");
+      toast.error(
         "Invalid file type. Please upload PDF, ZIP, RAR, or 7Z files only."
       );
       return;
@@ -97,17 +108,21 @@ export default function ApplyPage() {
 
     // Validate file size (10MB)
     if (file.size > 10 * 1024 * 1024) {
-      alert("File size exceeds 10MB limit.");
+      setPortfolioUploadMessage("");
+      toast.error("File size exceeds 10MB limit.");
       return;
     }
 
     setUploadingPortfolio(true);
+    setPortfolioUploadMessage("");
     try {
       const response = await uploadAPI.uploadPortfolio(file);
       setFormData({ ...formData, portfolio_url: response.data.file_url });
-      alert("Portfolio uploaded successfully!");
+      setPortfolioUploadMessage("✓ Portfolio uploaded successfully!");
+      setTimeout(() => setPortfolioUploadMessage(""), 5000); // Clear message after 5 seconds
     } catch (error: any) {
-      alert(error.response?.data?.error || "Failed to upload portfolio");
+      setPortfolioUploadMessage("");
+      toast.error(error.response?.data?.error || "Failed to upload portfolio");
     } finally {
       setUploadingPortfolio(false);
     }
@@ -118,7 +133,7 @@ export default function ApplyPage() {
 
     // Validate resume
     if (!formData.resume_url) {
-      alert("Please provide a CV/resume (either URL or file upload)");
+      toast.error("Please provide a CV/resume (either URL or file upload)");
       return;
     }
 
@@ -127,32 +142,32 @@ export default function ApplyPage() {
       const response = await applicationAPI.submit(formData);
       const applicationId = response.data.application?.id;
 
-      const message = applicationId
-        ? `Application submitted successfully!\n\nYour Application ID: ${applicationId}\n\nCheck your email for confirmation, or visit /application-status to track your application status anytime.`
-        : "Application submitted successfully! Check your email for confirmation.";
-
-      alert(message);
+      toast.success(
+        "Application submitted successfully! Check your email for confirmation."
+      );
 
       // Optionally redirect to status page
       if (applicationId && formData.email) {
-        const redirect = confirm(
-          "Would you like to check your application status now?"
-        );
-        if (redirect) {
-          router.push(
-            `/application-status?email=${encodeURIComponent(formData.email)}`
+        setTimeout(() => {
+          const redirect = window.confirm(
+            "Would you like to check your application status now?"
           );
-        } else {
-          router.push("/");
-        }
+          if (redirect) {
+            router.push(
+              `/application-status?email=${encodeURIComponent(formData.email)}`
+            );
+          } else {
+            router.push("/");
+          }
+        }, 500);
       } else {
-        router.push("/");
+        setTimeout(() => router.push("/"), 1500);
       }
     } catch (error: any) {
       if (error.response?.data?.message) {
-        alert(error.response.data.message);
+        toast.error(error.response.data.message);
       } else {
-        alert("Failed to submit application. Please try again.");
+        toast.error("Failed to submit application. Please try again.");
       }
     } finally {
       setLoading(false);
@@ -326,9 +341,9 @@ export default function ApplyPage() {
                   {uploadingCV && (
                     <p className="text-sm text-blue-600 mt-1">Uploading...</p>
                   )}
-                  {formData.resume_url && !uploadingCV && (
+                  {cvUploadMessage && (
                     <p className="text-sm text-green-600 mt-1">
-                      ✓ CV uploaded successfully
+                      {cvUploadMessage}
                     </p>
                   )}
                   <p className="text-xs text-gray-500 mt-1">
@@ -407,9 +422,9 @@ export default function ApplyPage() {
                   {uploadingPortfolio && (
                     <p className="text-sm text-blue-600 mt-1">Uploading...</p>
                   )}
-                  {formData.portfolio_url && !uploadingPortfolio && (
+                  {portfolioUploadMessage && (
                     <p className="text-sm text-green-600 mt-1">
-                      ✓ Portfolio uploaded successfully
+                      {portfolioUploadMessage}
                     </p>
                   )}
                   <p className="text-xs text-gray-500 mt-1">
