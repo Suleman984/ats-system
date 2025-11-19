@@ -76,10 +76,14 @@ func AddManualCandidate(c *gin.Context) {
 	adminIDVal, _ := c.Get("admin_id")
 	adminIDStr, _ := adminIDVal.(string)
 	adminID, _ := uuid.Parse(adminIDStr)
+	
+	// Parse company ID
+	companyUUID, _ := uuid.Parse(companyIDStr)
 
 	// Create application
 	application := models.Application{
-		JobID:             jobID,
+		JobID:             &jobID,
+		CompanyID:         companyUUID,
 		FullName:          req.FullName,
 		Email:             req.Email,
 		Phone:              req.Phone,
@@ -158,7 +162,6 @@ func AddManualCandidate(c *gin.Context) {
 	}()
 
 	// Log manual candidate addition
-	companyUUID, _ := uuid.Parse(companyIDStr)
 	services.LogActivity(
 		&companyUUID,
 		&adminID,

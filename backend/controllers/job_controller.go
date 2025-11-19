@@ -341,11 +341,15 @@ func DeleteJob(c *gin.Context) {
 	adminUUID, _ := uuid.Parse(adminIDStr)
 
 	if err := config.DB.Delete(&job).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete job"})
+		log.Printf("DeleteJob ERROR: Failed to delete job %s: %v", jobID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to delete job",
+			"details": err.Error(),
+		})
 		return
 	}
 
-	// Log job deletion
+	// Log job deletion (async, don't fail if logging fails)
 	services.LogJobDeleted(companyUUID, adminUUID, jobUUID, jobTitle)
 
 	c.JSON(http.StatusOK, gin.H{"message": "Job deleted successfully"})

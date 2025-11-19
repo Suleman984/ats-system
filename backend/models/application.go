@@ -8,7 +8,8 @@ import (
 
 type Application struct {
 	ID                 uuid.UUID  `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
-	JobID              uuid.UUID  `gorm:"type:uuid;not null" json:"job_id"`
+	JobID              *uuid.UUID `gorm:"type:uuid" json:"job_id,omitempty"` // Nullable - job may be deleted
+	CompanyID          uuid.UUID  `gorm:"type:uuid;not null" json:"company_id"` // Added to track company even if job deleted
 	FullName           string     `gorm:"size:255;not null" json:"full_name"`
 	Email              string     `gorm:"size:255;not null" json:"email"`
 	Phone              string     `gorm:"size:50" json:"phone"`

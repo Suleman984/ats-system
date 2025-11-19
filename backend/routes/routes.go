@@ -42,6 +42,8 @@ func SetupRoutes(router *gin.Engine) {
 			protected.GET("/applications", controllers.GetApplications)
 			protected.PUT("/applications/:id/shortlist", controllers.ShortlistApplication)
 			protected.PUT("/applications/:id/reject", controllers.RejectApplication)
+			protected.DELETE("/applications/:id", controllers.DeleteApplication)
+			protected.POST("/applications/bulk-delete", controllers.BulkDeleteApplications)
 			
 			// AI Shortlisting routes
 			protected.POST("/applications/ai-shortlist", controllers.AIShortlistApplication)

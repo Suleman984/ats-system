@@ -83,7 +83,8 @@ export interface Job {
 
 export interface Application {
   id: string;
-  job_id: string;
+  job_id?: string; // Optional - may be null if job was deleted
+  company_id?: string; // Added for tracking
   full_name: string;
   email: string;
   phone?: string;
@@ -280,6 +281,13 @@ export const applicationAPI = {
     ),
   reject: (id: string) =>
     api.put<{ message: string }>(`/applications/${id}/reject`),
+  delete: (id: string) =>
+    api.delete<{ message: string }>(`/applications/${id}`),
+  bulkDelete: (status: string) =>
+    api.post<{ message: string; deleted_count: number; total_found: number }>(
+      "/applications/bulk-delete",
+      { status }
+    ),
 };
 
 // Candidate Portal Types

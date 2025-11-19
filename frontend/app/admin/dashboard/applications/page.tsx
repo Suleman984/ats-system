@@ -98,6 +98,53 @@ export default function ApplicationsPage() {
     }
   };
 
+  const handleDelete = async (id: string, applicantName: string) => {
+    if (
+      !window.confirm(
+        `Are you sure you want to delete the application from ${applicantName}? This action cannot be undone.`
+      )
+    )
+      return;
+    try {
+      await applicationAPI.delete(id);
+      toast.success("Application deleted successfully");
+      fetchData();
+    } catch (error: any) {
+      toast.error(
+        error.response?.data?.error || "Failed to delete application"
+      );
+    }
+  };
+
+  const handleBulkDelete = async (status: string) => {
+    const statusLabels: { [key: string]: string } = {
+      pending: "pending",
+      shortlisted: "shortlisted",
+      rejected: "rejected",
+    };
+    const label = statusLabels[status] || status;
+
+    if (
+      !window.confirm(
+        `Are you sure you want to delete ALL ${label} applications? This action cannot be undone.`
+      )
+    )
+      return;
+
+    try {
+      const response = await applicationAPI.bulkDelete(status);
+      toast.success(
+        response.data.message ||
+          `Deleted ${response.data.deleted_count} ${label} application(s)`
+      );
+      fetchData();
+    } catch (error: any) {
+      toast.error(
+        error.response?.data?.error || "Failed to delete applications"
+      );
+    }
+  };
+
   const handleAnalyzeCV = async (app: Application) => {
     // Add to analyzing set
     setAnalyzingApps((prev) => new Set(prev).add(app.id));
@@ -242,6 +289,36 @@ export default function ApplicationsPage() {
               </button>
             </div>
           )}
+
+          {/* Bulk Delete Actions */}
+          <div className="mt-4 pt-4 border-t">
+            <label className="block text-sm font-medium mb-2 text-gray-700">
+              Bulk Delete by Status
+            </label>
+            <div className="flex gap-2 flex-wrap">
+              <button
+                onClick={() => handleBulkDelete("pending")}
+                className="px-3 py-1.5 text-xs bg-yellow-100 text-yellow-800 rounded hover:bg-yellow-200 transition-colors"
+              >
+                Delete All Pending
+              </button>
+              <button
+                onClick={() => handleBulkDelete("shortlisted")}
+                className="px-3 py-1.5 text-xs bg-green-100 text-green-800 rounded hover:bg-green-200 transition-colors"
+              >
+                Delete All Shortlisted
+              </button>
+              <button
+                onClick={() => handleBulkDelete("rejected")}
+                className="px-3 py-1.5 text-xs bg-red-100 text-red-800 rounded hover:bg-red-200 transition-colors"
+              >
+                Delete All Rejected
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              ⚠️ Warning: Bulk delete actions cannot be undone
+            </p>
+          </div>
         </div>
 
         {/* Applications List */}
@@ -302,7 +379,14 @@ export default function ApplicationsPage() {
                         </div>
                       </td>
                       <td className="px-6 py-4">
-                        <p className="text-sm">{app.job?.title || "N/A"}</p>
+                        <p className="text-sm">
+                          {app.job?.title || "Job Deleted"}
+                          {!app.job && app.job_id && (
+                            <span className="text-xs text-gray-400 ml-1">
+                              (Job ID: {app.job_id})
+                            </span>
+                          )}
+                        </p>
                       </td>
                       <td className="px-6 py-4">
                         <p className="text-sm">
@@ -483,6 +567,17 @@ export default function ApplicationsPage() {
                                     </button>
                                   </>
                                 )}
+                                <div className="border-t border-gray-200 my-1"></div>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDelete(app.id, app.full_name);
+                                    setOpenDropdown(null);
+                                  }}
+                                  className="block w-full text-left px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 transition-colors font-medium"
+                                >
+                                  🗑️ Delete Application
+                                </button>
                               </div>
                             </>
                           )}

@@ -5,6 +5,7 @@ import (
 	"ats-backend/models"
 	"ats-backend/services"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -23,7 +24,12 @@ func SubmitApplication(c *gin.Context) {
 
 	// Check if job exists and is open
 	var job models.Job
-	if err := config.DB.First(&job, "id = ?", application.JobID).Error; err != nil {
+	jobID := application.JobID
+	if jobID == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Job ID is required"})
+		return
+	}
+	if err := config.DB.First(&job, "id = ?", *jobID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
 		return
 	}
@@ -49,6 +55,8 @@ func SubmitApplication(c *gin.Context) {
 	// Set application timestamp
 	application.AppliedAt = time.Now()
 	application.Status = "pending"
+	// Set company_id from job (for tracking even if job is deleted later)
+	application.CompanyID = job.CompanyID
 
 	// Save to database
 	if err := config.DB.Create(&application).Error; err != nil {
@@ -157,10 +165,19 @@ func GetApplications(c *gin.Context) {
 	}
 	var applications []models.Application
 
-	// Join with jobs table to filter by company
-	query := config.DB.Joins("JOIN jobs ON jobs.id = applications.job_id").
+	// Get all applications for this company, including those whose jobs were deleted
+	// Strategy:
+	// 1. Get applications where job exists and belongs to company
+	// 2. If company_id column exists in applications, also get applications with NULL job_id for this company
+	// Note: After running ADD_COMPANY_ID_TO_APPLICATIONS.sql, this will work perfectly
+	query := config.DB.Table("applications").
+		Select("applications.*").
+		Joins("LEFT JOIN jobs ON jobs.id = applications.job_id").
 		Where("jobs.company_id = ?", companyID).
 		Preload("Job")
+	
+	// If company_id column exists, also include applications with deleted jobs
+	// This will be handled automatically after migration adds company_id column
 
 	// Filter by job_id if provided
 	if jobID := c.Query("job_id"); jobID != "" {
@@ -218,9 +235,11 @@ func ShortlistApplication(c *gin.Context) {
 	}
 
 	var application models.Application
-	// Verify application belongs to company and preload job
-	err := config.DB.Joins("JOIN jobs ON jobs.id = applications.job_id").
-		Where("applications.id = ? AND jobs.company_id = ?", applicationID, companyID).
+	// Verify application belongs to company (even if job is deleted)
+	err := config.DB.Table("applications").
+		Select("applications.*").
+		Joins("LEFT JOIN jobs ON jobs.id = applications.job_id").
+		Where("applications.id = ? AND (applications.company_id = ? OR jobs.company_id = ?)", applicationID, companyID, companyID).
 		Preload("Job").
 		First(&application).Error
 
@@ -248,7 +267,10 @@ func ShortlistApplication(c *gin.Context) {
 	adminIDStr, _ := adminIDVal.(string)
 	adminUUID, _ := uuid.Parse(adminIDStr)
 	applicationUUID, _ := uuid.Parse(applicationID)
-	jobTitle := application.Job.Title
+	jobTitle := "Unknown Job (Job Deleted)"
+	if application.JobID != nil && application.Job.ID != uuid.Nil {
+		jobTitle = application.Job.Title
+	}
 
 	services.LogApplicationStatusChanged(companyUUID, adminUUID, applicationUUID, application.FullName, jobTitle, oldStatus, "shortlisted")
 
@@ -283,8 +305,11 @@ func RejectApplication(c *gin.Context) {
 	}
 
 	var application models.Application
-	err := config.DB.Joins("JOIN jobs ON jobs.id = applications.job_id").
-		Where("applications.id = ? AND jobs.company_id = ?", applicationID, companyID).
+	// Verify application belongs to company (even if job is deleted)
+	err := config.DB.Table("applications").
+		Select("applications.*").
+		Joins("LEFT JOIN jobs ON jobs.id = applications.job_id").
+		Where("applications.id = ? AND (applications.company_id = ? OR jobs.company_id = ?)", applicationID, companyID, companyID).
 		Preload("Job").
 		First(&application).Error
 
@@ -311,7 +336,10 @@ func RejectApplication(c *gin.Context) {
 	adminIDStr, _ := adminIDVal.(string)
 	adminUUID, _ := uuid.Parse(adminIDStr)
 	applicationUUID, _ := uuid.Parse(applicationID)
-	jobTitle := application.Job.Title
+	jobTitle := "Unknown Job (Job Deleted)"
+	if application.JobID != nil && application.Job.ID != uuid.Nil {
+		jobTitle = application.Job.Title
+	}
 
 	services.LogApplicationStatusChanged(companyUUID, adminUUID, applicationUUID, application.FullName, jobTitle, oldStatus, "rejected")
 
@@ -327,6 +355,171 @@ func RejectApplication(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Application rejected",
+	})
+}
+
+// DeleteApplication deletes a single application
+func DeleteApplication(c *gin.Context) {
+	applicationID := c.Param("id")
+	companyIDVal, exists := c.Get("company_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+		return
+	}
+	companyID, ok := companyIDVal.(string)
+	if !ok || companyID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
+		return
+	}
+
+	var application models.Application
+	// Verify application belongs to company (even if job is deleted)
+	err := config.DB.Table("applications").
+		Select("applications.*").
+		Joins("LEFT JOIN jobs ON jobs.id = applications.job_id").
+		Where("applications.id = ? AND (jobs.company_id = ? OR applications.job_id IS NULL)", applicationID, companyID).
+		Preload("Job").
+		First(&application).Error
+
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Application not found"})
+		return
+	}
+
+	// Store application details for logging before deletion
+	applicantName := application.FullName
+	jobTitle := "Unknown Job (Job Deleted)"
+	if application.JobID != nil && application.Job.ID != uuid.Nil {
+		jobTitle = application.Job.Title
+	}
+	applicationUUID, _ := uuid.Parse(applicationID)
+	companyUUID, _ := uuid.Parse(companyID)
+	adminIDVal, _ := c.Get("admin_id")
+	adminIDStr, _ := adminIDVal.(string)
+	adminUUID, _ := uuid.Parse(adminIDStr)
+
+	// Delete the application
+	if err := config.DB.Delete(&application).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete application"})
+		return
+	}
+
+	// Log application deletion
+	services.LogActivity(
+		&companyUUID,
+		&adminUUID,
+		"application_deleted",
+		"application",
+		&applicationUUID,
+		"Application deleted: "+applicantName+" for job: "+jobTitle,
+		map[string]interface{}{
+			"applicant_name": applicantName,
+			"applicant_email": application.Email,
+			"job_title": jobTitle,
+			"status": application.Status,
+		},
+	)
+
+	c.JSON(http.StatusOK, gin.H{"message": "Application deleted successfully"})
+}
+
+// BulkDeleteApplications deletes multiple applications by status
+func BulkDeleteApplications(c *gin.Context) {
+	companyIDVal, exists := c.Get("company_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+		return
+	}
+	companyID, ok := companyIDVal.(string)
+	if !ok || companyID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
+		return
+	}
+
+	var req struct {
+		Status string `json:"status" binding:"required"` // pending, shortlisted, rejected
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate status
+	validStatuses := []string{"pending", "shortlisted", "rejected"}
+	isValid := false
+	for _, s := range validStatuses {
+		if req.Status == s {
+			isValid = true
+			break
+		}
+	}
+	if !isValid {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid status. Must be: pending, shortlisted, or rejected"})
+		return
+	}
+
+	// Get applications to delete
+	var applications []models.Application
+	err := config.DB.Table("applications").
+		Select("applications.*").
+		Joins("LEFT JOIN jobs ON jobs.id = applications.job_id").
+		Where("applications.status = ? AND (applications.company_id = ? OR jobs.company_id = ?)", req.Status, companyID, companyID).
+		Preload("Job").
+		Find(&applications).Error
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch applications"})
+		return
+	}
+
+	if len(applications) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "No applications found with the specified status",
+			"deleted_count": 0,
+		})
+		return
+	}
+
+	// Get admin ID for logging
+	adminIDVal, _ := c.Get("admin_id")
+	adminIDStr, _ := adminIDVal.(string)
+	adminUUID, _ := uuid.Parse(adminIDStr)
+	companyUUID, _ := uuid.Parse(companyID)
+
+	// Delete applications
+	deletedCount := 0
+	for _, app := range applications {
+		if err := config.DB.Delete(&app).Error; err == nil {
+			deletedCount++
+			// Log each deletion
+			appUUID, _ := uuid.Parse(app.ID.String())
+			jobTitle := "Unknown Job (Job Deleted)"
+			if app.JobID != nil && app.Job.ID != uuid.Nil {
+				jobTitle = app.Job.Title
+			}
+			services.LogActivity(
+				&companyUUID,
+				&adminUUID,
+				"application_deleted",
+				"application",
+				&appUUID,
+				"Bulk deleted application: "+app.FullName+" for job: "+jobTitle,
+				map[string]interface{}{
+					"applicant_name": app.FullName,
+					"applicant_email": app.Email,
+					"job_title": jobTitle,
+					"status": app.Status,
+					"bulk_delete": true,
+				},
+			)
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": fmt.Sprintf("Deleted %d application(s) with status '%s'", deletedCount, req.Status),
+		"deleted_count": deletedCount,
+		"total_found": len(applications),
 	})
 }
 
