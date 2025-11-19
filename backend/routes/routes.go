@@ -16,6 +16,10 @@ func SetupRoutes(router *gin.Engine) {
 		api.GET("/jobs/public/:companyId", controllers.GetPublicJobs)
 		api.POST("/applications", controllers.SubmitApplication)
 		
+		// Candidate Portal routes (public)
+		api.POST("/candidate/status", controllers.GetApplicationStatus)
+		api.GET("/candidate/applications", controllers.GetApplicationStatusByEmail)
+		
 		// File upload routes (public for application submission)
 		api.POST("/upload/cv", controllers.UploadCV)
 		api.POST("/upload/portfolio", controllers.UploadPortfolio)

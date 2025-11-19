@@ -124,11 +124,30 @@ export default function ApplyPage() {
 
     setLoading(true);
     try {
-      await applicationAPI.submit(formData);
-      alert(
-        "Application submitted successfully! Check your email for confirmation."
-      );
-      router.push("/");
+      const response = await applicationAPI.submit(formData);
+      const applicationId = response.data.application?.id;
+
+      const message = applicationId
+        ? `Application submitted successfully!\n\nYour Application ID: ${applicationId}\n\nCheck your email for confirmation, or visit /application-status to track your application status anytime.`
+        : "Application submitted successfully! Check your email for confirmation.";
+
+      alert(message);
+
+      // Optionally redirect to status page
+      if (applicationId && formData.email) {
+        const redirect = confirm(
+          "Would you like to check your application status now?"
+        );
+        if (redirect) {
+          router.push(
+            `/application-status?email=${encodeURIComponent(formData.email)}`
+          );
+        } else {
+          router.push("/");
+        }
+      } else {
+        router.push("/");
+      }
     } catch (error: any) {
       if (error.response?.data?.message) {
         alert(error.response.data.message);

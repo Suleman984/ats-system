@@ -197,6 +197,12 @@ func sendEmail(to, subject, htmlBody string) error {
 }
 
 func SendConfirmationEmail(to, name, jobTitle string) error {
+	// Get frontend URL from environment or use default
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if frontendURL == "" {
+		frontendURL = "http://localhost:3000"
+	}
+	
 	subject := "Application Received - " + jobTitle
 	html := fmt.Sprintf(`
 		<!DOCTYPE html>
@@ -209,19 +215,30 @@ func SendConfirmationEmail(to, name, jobTitle string) error {
 				<h2 style="color: #2563eb;">Hello %s,</h2>
 				<p>Thank you for applying to the <strong>%s</strong> position.</p>
 				<p>We have received your application and will review it shortly.</p>
+				<p>You can check your application status anytime by visiting our candidate portal:</p>
+				<p style="text-align: center; margin: 20px 0;">
+					<a href="%s/application-status" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">Check Application Status</a>
+				</p>
+				<p style="font-size: 12px; color: #666;">You'll need your email address (%s) to check your status.</p>
 				<p>You will hear from us soon!</p>
 				<br>
 				<p>Best regards,<br>The Hiring Team</p>
 			</div>
 		</body>
 		</html>
-	`, name, jobTitle)
+	`, name, jobTitle, frontendURL, to)
 
 	return sendEmail(to, subject, html)
 }
 
-func SendShortlistEmail(to, name string) error {
-	subject := "Congratulations! You've been shortlisted"
+func SendShortlistEmail(to, name, jobTitle string) error {
+	// Get frontend URL from environment or use default
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if frontendURL == "" {
+		frontendURL = "http://localhost:3000"
+	}
+	
+	subject := "Congratulations! You've been Shortlisted"
 	html := fmt.Sprintf(`
 		<!DOCTYPE html>
 		<html>
@@ -230,22 +247,31 @@ func SendShortlistEmail(to, name string) error {
 		</head>
 		<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
 			<div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-				<h2 style="color: #16a34a;">Hello %s,</h2>
-				<p>Great news! Your application has been shortlisted.</p>
-				<p>We were impressed with your qualifications and would like to invite you for an interview.</p>
-				<p>We will contact you shortly with further details.</p>
+				<h2 style="color: #10b981;">Congratulations %s!</h2>
+				<p>Great news! You have been <strong style="color: #10b981;">shortlisted</strong> for the <strong>%s</strong> position.</p>
+				<p>Our team will be in touch with you soon regarding the next steps in the hiring process.</p>
+				<p>You can check your application status anytime:</p>
+				<p style="text-align: center; margin: 20px 0;">
+					<a href="%s/application-status" style="background-color: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">View Application Status</a>
+				</p>
 				<br>
 				<p>Best regards,<br>The Hiring Team</p>
 			</div>
 		</body>
 		</html>
-	`, name)
+	`, name, jobTitle, frontendURL)
 
 	return sendEmail(to, subject, html)
 }
 
-func SendRejectionEmail(to, name string) error {
-	subject := "Application Update"
+func SendRejectionEmail(to, name, jobTitle string) error {
+	// Get frontend URL from environment or use default
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if frontendURL == "" {
+		frontendURL = "http://localhost:3000"
+	}
+	
+	subject := "Application Update - " + jobTitle
 	html := fmt.Sprintf(`
 		<!DOCTYPE html>
 		<html>
@@ -254,17 +280,20 @@ func SendRejectionEmail(to, name string) error {
 		</head>
 		<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
 			<div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-				<h2 style="color: #333;">Hello %s,</h2>
-				<p>Thank you for your interest in our company and for taking the time to apply.</p>
-				<p>After careful consideration, we regret to inform you that we will not be moving forward with your application at this time.</p>
-				<p>We encourage you to apply for future opportunities that match your skills and experience.</p>
-				<p>We wish you the best in your job search.</p>
+				<h2 style="color: #2563eb;">Hello %s,</h2>
+				<p>Thank you for your interest in the <strong>%s</strong> position.</p>
+				<p>After careful consideration, we have decided to move forward with other candidates at this time.</p>
+				<p>We appreciate the time you took to apply and encourage you to apply for future opportunities.</p>
+				<p>You can check your application status anytime:</p>
+				<p style="text-align: center; margin: 20px 0;">
+					<a href="%s/application-status" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">View Application Status</a>
+				</p>
 				<br>
 				<p>Best regards,<br>The Hiring Team</p>
 			</div>
 		</body>
 		</html>
-	`, name)
+	`, name, jobTitle, frontendURL)
 
 	return sendEmail(to, subject, html)
 }

@@ -221,7 +221,7 @@ func ShortlistApplication(c *gin.Context) {
 	// Send shortlist email (async with error logging)
 	go func() {
 		log.Printf("Sending shortlist email to %s for application %s", application.Email, applicationID)
-		if err := services.SendShortlistEmail(application.Email, application.FullName); err != nil {
+		if err := services.SendShortlistEmail(application.Email, application.FullName, jobTitle); err != nil {
 			log.Printf("ERROR: Failed to send shortlist email to %s: %v", application.Email, err)
 		} else {
 			log.Printf("SUCCESS: Shortlist email sent to %s", application.Email)
@@ -284,7 +284,7 @@ func RejectApplication(c *gin.Context) {
 	// Send rejection email (async with error logging)
 	go func() {
 		log.Printf("Sending rejection email to %s", application.Email)
-		if err := services.SendRejectionEmail(application.Email, application.FullName); err != nil {
+		if err := services.SendRejectionEmail(application.Email, application.FullName, jobTitle); err != nil {
 			log.Printf("ERROR: Failed to send rejection email to %s: %v", application.Email, err)
 		} else {
 			log.Printf("SUCCESS: Rejection email sent to %s", application.Email)

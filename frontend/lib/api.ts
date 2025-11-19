@@ -264,6 +264,42 @@ export const applicationAPI = {
     api.put<{ message: string }>(`/applications/${id}/reject`),
 };
 
+// Candidate Portal Types
+export interface ApplicationStatus {
+  id: string;
+  full_name: string;
+  email: string;
+  status: string;
+  applied_at: string;
+  reviewed_at?: string;
+  score: number;
+  job: {
+    id: string;
+    title: string;
+    company_name?: string;
+  };
+}
+
+// Candidate Portal APIs (public, no auth - use separate axios instance)
+const publicApi = axios.create({
+  baseURL: API_BASE_URL,
+  // No auth interceptor for public endpoints
+});
+
+// Candidate Portal APIs (public, no auth)
+export const candidatePortalAPI = {
+  checkStatus: (email: string, applicationId: string) =>
+    publicApi.post<{ application: ApplicationStatus }>("/candidate/status", {
+      email,
+      application_id: applicationId,
+    }),
+  getByEmail: (email: string) =>
+    publicApi.get<{ applications: ApplicationStatus[]; count: number }>(
+      "/candidate/applications",
+      { params: { email } }
+    ),
+};
+
 // CV Matching Types (Local matching, no AI required)
 export interface CVAnalysisResult {
   match_score: number;
