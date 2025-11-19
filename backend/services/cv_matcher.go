@@ -404,7 +404,7 @@ func extractJobTitleFromCV(cvText string) string {
 	}
 	
 	for _, pattern := range titlePatterns {
-		matches := pattern.FindStringSubmatch(cvText)
+		matches := pattern.FindStringSubmatch(cvLower)
 		if len(matches) > 1 {
 			title := strings.TrimSpace(matches[1])
 			if len(title) > 3 && len(title) < 50 {
