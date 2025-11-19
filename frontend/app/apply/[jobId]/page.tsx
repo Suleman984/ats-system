@@ -38,10 +38,13 @@ export default function ApplyPage() {
 
   const fetchJob = async () => {
     try {
-      // Try to get job from public endpoint - we need companyId
-      // For now, we'll handle this in the form
+      // Note: We need a public endpoint to get job details by ID
+      // For now, we'll check status on submission, but ideally we'd fetch it here
+      setLoading(true);
     } catch (error) {
       console.error("Failed to fetch job:", error);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -164,8 +167,13 @@ export default function ApplyPage() {
         setTimeout(() => router.push("/"), 1500);
       }
     } catch (error: any) {
+      // Check if job is closed or deadline passed
       if (error.response?.data?.message) {
         toast.error(error.response.data.message);
+        // If job is closed, redirect back after showing message
+        if (error.response.data.message.includes("closed")) {
+          setTimeout(() => router.push("/"), 3000);
+        }
       } else {
         toast.error("Failed to submit application. Please try again.");
       }

@@ -171,12 +171,16 @@ export default function CreateJobPage() {
               <input
                 type="date"
                 required
+                min={new Date().toISOString().split("T")[0]}
                 className="w-full px-4 py-2 border rounded-lg"
                 value={formData.deadline}
                 onChange={(e) =>
                   setFormData({ ...formData, deadline: e.target.value })
                 }
               />
+              <p className="text-xs text-gray-500 mt-1">
+                Cannot select past dates
+              </p>
             </div>
           </div>
           {/* Shortlisting Criteria Section */}

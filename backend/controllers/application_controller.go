@@ -28,6 +28,15 @@ func SubmitApplication(c *gin.Context) {
 		return
 	}
 
+	// Check if job is closed
+	if job.Status != "open" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "Applications closed",
+			"message": "This job posting is currently closed and not accepting applications.",
+		})
+		return
+	}
+
 	// Check if deadline has passed
 	if time.Now().After(job.Deadline.Time) {
 		c.JSON(http.StatusBadRequest, gin.H{

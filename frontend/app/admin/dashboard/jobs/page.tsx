@@ -39,6 +39,21 @@ export default function JobsPage() {
     }
   };
 
+  const handleToggleStatus = async (job: Job) => {
+    const newStatus = job.status === "open" ? "closed" : "open";
+    const action = newStatus === "open" ? "reopen" : "close";
+
+    if (!window.confirm(`Are you sure you want to ${action} this job?`)) return;
+
+    try {
+      await jobAPI.update(job.id, { status: newStatus });
+      toast.success(`Job ${action}d successfully`);
+      fetchJobs();
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || `Failed to ${action} job`);
+    }
+  };
+
   if (loading) return <div className="p-6">Loading...</div>;
 
   return (
@@ -135,13 +150,23 @@ export default function JobsPage() {
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 flex-wrap">
                         <Link
                           href={`/admin/dashboard/jobs/${job.id}/edit`}
                           className="text-blue-600 hover:underline text-sm"
                         >
                           Edit
                         </Link>
+                        <button
+                          onClick={() => handleToggleStatus(job)}
+                          className={`text-sm hover:underline ${
+                            job.status === "open"
+                              ? "text-orange-600"
+                              : "text-green-600"
+                          }`}
+                        >
+                          {job.status === "open" ? "Close" : "Reopen"}
+                        </button>
                         <button
                           onClick={() => handleDelete(job.id)}
                           className="text-red-600 hover:underline text-sm"
