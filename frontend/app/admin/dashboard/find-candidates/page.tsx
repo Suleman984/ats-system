@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { candidateSearchAPI, CandidateSearchResult } from "@/lib/api";
+import { toast } from "@/components/Toast";
 
 export default function FindCandidatesPage() {
   const [searchResults, setSearchResults] = useState<CandidateSearchResult[]>(
@@ -79,7 +80,7 @@ export default function FindCandidatesPage() {
       setTotalCandidates(response.data.total || 0);
     } catch (error) {
       console.error("Failed to search candidates:", error);
-      alert("Failed to search candidates. Please try again.");
+      toast.error("Failed to search candidates. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -92,7 +93,7 @@ export default function FindCandidatesPage() {
       setShowDetails(candidateId);
     } catch (error) {
       console.error("Failed to fetch candidate details:", error);
-      alert("Failed to load candidate details.");
+      toast.error("Failed to load candidate details.");
     }
   };
 

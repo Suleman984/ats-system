@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { jobAPI } from "@/lib/api";
+import { toast } from "@/components/Toast";
 
 export default function CreateJobPage() {
   const router = useRouter();
@@ -58,10 +59,10 @@ export default function CreateJobPage() {
         ...formData,
         shortlist_criteria: shortlistCriteria,
       });
-      alert("Job posted successfully!");
-      router.push("/embed/dashboard/jobs");
+      toast.success("Job posted successfully!");
+      setTimeout(() => router.push("/embed/dashboard/jobs"), 1000);
     } catch (error: any) {
-      alert(error.response?.data?.error || "Failed to create job");
+      toast.error(error.response?.data?.error || "Failed to create job");
     } finally {
       setLoading(false);
     }

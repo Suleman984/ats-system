@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { jobAPI } from "@/lib/api";
 import { Job } from "@/lib/api";
+import { toast } from "@/components/Toast";
 
 export default function EditJobPage() {
   const router = useRouter();
@@ -77,8 +78,8 @@ export default function EditJobPage() {
         }
       }
     } catch (error: any) {
-      alert(error.response?.data?.error || "Failed to load job");
-      router.push("/admin/dashboard/jobs");
+      toast.error(error.response?.data?.error || "Failed to load job");
+      setTimeout(() => router.push("/admin/dashboard/jobs"), 1500);
     } finally {
       setLoading(false);
     }
@@ -115,10 +116,10 @@ export default function EditJobPage() {
         ...formData,
         shortlist_criteria: shortlistCriteria,
       });
-      alert("Job updated successfully!");
-      router.push("/admin/dashboard/jobs");
+      toast.success("Job updated successfully!");
+      setTimeout(() => router.push("/admin/dashboard/jobs"), 1000);
     } catch (error: any) {
-      alert(error.response?.data?.error || "Failed to update job");
+      toast.error(error.response?.data?.error || "Failed to update job");
     } finally {
       setSubmitting(false);
     }

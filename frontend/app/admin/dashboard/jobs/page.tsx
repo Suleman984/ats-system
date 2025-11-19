@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { jobAPI, Job } from "@/lib/api";
 import Link from "next/link";
+import { toast } from "@/components/Toast";
 
 export default function JobsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -28,12 +29,13 @@ export default function JobsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this job?")) return;
+    if (!window.confirm("Are you sure you want to delete this job?")) return;
     try {
       await jobAPI.delete(id);
+      toast.success("Job deleted successfully");
       fetchJobs();
     } catch (error) {
-      alert("Failed to delete job");
+      toast.error("Failed to delete job");
     }
   };
 

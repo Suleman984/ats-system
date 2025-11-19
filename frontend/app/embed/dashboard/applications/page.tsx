@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { applicationAPI, jobAPI, Application, Job } from "@/lib/api";
+import { toast } from "@/components/Toast";
 
 export default function ApplicationsPage() {
   const [applications, setApplications] = useState<Application[]>([]);
@@ -69,24 +70,24 @@ export default function ApplicationsPage() {
   }, [selectedJob, selectedStatus, dateFrom, dateTo, loading, fetchData]);
 
   const handleShortlist = async (id: string) => {
-    if (!confirm("Shortlist this candidate?")) return;
+    if (!window.confirm("Shortlist this candidate?")) return;
     try {
       await applicationAPI.shortlist(id);
-      alert("Candidate shortlisted! Email sent.");
+      toast.success("Candidate shortlisted! Email sent.");
       fetchData();
     } catch (error) {
-      alert("Failed to shortlist candidate");
+      toast.error("Failed to shortlist candidate");
     }
   };
 
   const handleReject = async (id: string) => {
-    if (!confirm("Reject this candidate?")) return;
+    if (!window.confirm("Reject this candidate?")) return;
     try {
       await applicationAPI.reject(id);
-      alert("Candidate rejected. Email sent.");
+      toast.success("Candidate rejected. Email sent.");
       fetchData();
     } catch (error) {
-      alert("Failed to reject candidate");
+      toast.error("Failed to reject candidate");
     }
   };
 
@@ -269,24 +270,23 @@ export default function ApplicationsPage() {
                                     typeof app.analysis_result === "string"
                                       ? JSON.parse(app.analysis_result)
                                       : app.analysis_result;
-                                  alert(
-                                    `AI Analysis:\n\nMatch Score: ${
-                                      analysis.match_score
-                                    }%\n\nSkills: ${
-                                      analysis.skills?.join(", ") || "N/A"
-                                    }\nExperience: ${
-                                      analysis.experience
-                                    } years\nLanguages: ${
-                                      analysis.languages?.join(", ") || "N/A"
-                                    }\n\nStrengths:\n${
-                                      analysis.strengths?.join("\n") || "N/A"
-                                    }\n\nMissing Skills:\n${
-                                      analysis.missing_skills?.join("\n") ||
-                                      "None"
-                                    }\n\nReason: ${
-                                      analysis.match_reason || "N/A"
-                                    }`
-                                  );
+                                  const analysisText = `AI Analysis:\n\nMatch Score: ${
+                                    analysis.match_score
+                                  }%\n\nSkills: ${
+                                    analysis.skills?.join(", ") || "N/A"
+                                  }\nExperience: ${
+                                    analysis.experience
+                                  } years\nLanguages: ${
+                                    analysis.languages?.join(", ") || "N/A"
+                                  }\n\nStrengths:\n${
+                                    analysis.strengths?.join("\n") || "N/A"
+                                  }\n\nMissing Skills:\n${
+                                    analysis.missing_skills?.join("\n") ||
+                                    "None"
+                                  }\n\nReason: ${
+                                    analysis.match_reason || "N/A"
+                                  }`;
+                                  toast.info(analysisText.split("\n\n")[0]);
                                 }}
                                 className="text-xs text-blue-600 cursor-pointer hover:underline"
                                 title="View AI Analysis Details"

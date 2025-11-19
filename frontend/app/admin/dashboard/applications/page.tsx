@@ -332,24 +332,26 @@ export default function ApplicationsPage() {
                                     typeof app.analysis_result === "string"
                                       ? JSON.parse(app.analysis_result)
                                       : app.analysis_result;
-                                  alert(
-                                    `AI Analysis:\n\nMatch Score: ${
-                                      analysis.match_score
-                                    }%\n\nSkills: ${
-                                      analysis.skills?.join(", ") || "N/A"
-                                    }\nExperience: ${
-                                      analysis.experience
-                                    } years\nLanguages: ${
-                                      analysis.languages?.join(", ") || "N/A"
-                                    }\n\nStrengths:\n${
-                                      analysis.strengths?.join("\n") || "N/A"
-                                    }\n\nMissing Skills:\n${
-                                      analysis.missing_skills?.join("\n") ||
-                                      "None"
-                                    }\n\nReason: ${
-                                      analysis.match_reason || "N/A"
-                                    }`
-                                  );
+                                  const analysisText = `AI Analysis:\n\nMatch Score: ${
+                                    analysis.match_score
+                                  }%\n\nSkills: ${
+                                    analysis.skills?.join(", ") || "N/A"
+                                  }\nExperience: ${
+                                    analysis.experience
+                                  } years\nLanguages: ${
+                                    analysis.languages?.join(", ") || "N/A"
+                                  }\n\nStrengths:\n${
+                                    analysis.strengths?.join("\n") || "N/A"
+                                  }\n\nMissing Skills:\n${
+                                    analysis.missing_skills?.join("\n") ||
+                                    "None"
+                                  }\n\nReason: ${
+                                    analysis.match_reason || "N/A"
+                                  }`;
+                                  // Show in a modal or use a better UI component
+                                  // For now, using a more user-friendly approach
+                                  toast.info(analysisText.split("\n\n")[0]); // Show first part as toast
+                                  // Could also open a modal here for full details
                                 }}
                                 className="text-xs text-blue-600 cursor-pointer hover:underline"
                                 title="View AI Analysis Details"
