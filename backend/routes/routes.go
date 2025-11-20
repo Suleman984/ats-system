@@ -69,6 +69,18 @@ func SetupRoutes(router *gin.Engine) {
 			// CV Reparsing routes (for fixing existing applications)
 			protected.POST("/candidates/reparse-all", controllers.ReparseAllCVs)
 			protected.POST("/candidates/:id/reparse", controllers.ReparseSingleCV)
+			
+			// CRM routes
+			protected.POST("/crm/notes", controllers.AddCandidateNote)
+			protected.GET("/crm/applications/:id/notes", controllers.GetCandidateNotes)
+			protected.PUT("/crm/notes/:id", controllers.UpdateCandidateNote)
+			protected.DELETE("/crm/notes/:id", controllers.DeleteCandidateNote)
+			// Talent pool routes - GET must come before DELETE with :id parameter
+			protected.GET("/crm/talent-pool", controllers.GetTalentPool)
+			protected.POST("/crm/talent-pool", controllers.AddToTalentPool)
+			protected.DELETE("/crm/talent-pool/:id", controllers.RemoveFromTalentPool)
+			protected.PUT("/crm/applications/:id/referral", controllers.UpdateReferralInfo)
+			protected.GET("/crm/applications/:id/timeline", controllers.GetRelationshipTimeline)
 		}
 
 		// Super Admin protected routes

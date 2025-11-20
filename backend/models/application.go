@@ -30,6 +30,15 @@ type Application struct {
 	CVViewedBy         *uuid.UUID `gorm:"type:uuid" json:"cv_viewed_by,omitempty"` // Admin who viewed CV
 	ExpectedResponseDate *time.Time `gorm:"type:date" json:"expected_response_date,omitempty"` // Expected response date
 	LastStatusUpdate   *time.Time `json:"last_status_update,omitempty"` // Last time status was updated
+	
+	// CRM Fields
+	ReferralSource     string     `gorm:"size:255" json:"referral_source,omitempty"` // How they heard about the job
+	ReferredByName     string     `gorm:"size:255" json:"referred_by_name,omitempty"` // Name of referrer
+	ReferredByEmail    string     `gorm:"size:255" json:"referred_by_email,omitempty"` // Email of referrer
+	ReferredByPhone    string     `gorm:"size:50" json:"referred_by_phone,omitempty"` // Phone of referrer
+	InTalentPool       bool       `gorm:"default:false" json:"in_talent_pool"` // Marked for future opportunities
+	TalentPoolAddedAt  *time.Time `json:"talent_pool_added_at,omitempty"` // When added to talent pool
+	TalentPoolAddedBy  *uuid.UUID `gorm:"type:uuid" json:"talent_pool_added_by,omitempty"` // Admin who added to talent pool
 
 	// Relations
 	Job Job `gorm:"foreignKey:JobID" json:"job,omitempty"`

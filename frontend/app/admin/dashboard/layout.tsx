@@ -64,6 +64,9 @@ export default function DashboardLayout({
                 <NavLink href="/admin/dashboard/applications">
                   Applications
                 </NavLink>
+                <NavLink href="/admin/dashboard/talent-pool">
+                  ⭐ Talent Pool
+                </NavLink>
                 <NavLink href="/admin/dashboard/find-candidates">
                   Find Candidates
                 </NavLink>
@@ -147,6 +150,12 @@ export default function DashboardLayout({
                 onClick={() => setMobileMenuOpen(false)}
               >
                 Applications
+              </MobileNavLink>
+              <MobileNavLink
+                href="/admin/dashboard/talent-pool"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                ⭐ Talent Pool
               </MobileNavLink>
               <MobileNavLink
                 href="/admin/dashboard/find-candidates"

@@ -99,6 +99,13 @@ export interface Application {
   analysis_result?: CVAnalysisResult | string; // AI analysis details (can be string JSON or parsed object)
   applied_at: string;
   reviewed_at?: string;
+  // CRM fields
+  referral_source?: string;
+  referred_by_name?: string;
+  referred_by_email?: string;
+  referred_by_phone?: string;
+  in_talent_pool?: boolean;
+  talent_pool_added_at?: string;
   job?: Job;
 }
 
@@ -300,6 +307,89 @@ export const applicationAPI = {
     api.post<{ message: string; data: Message }>(
       `/applications/${id}/messages`,
       { message }
+    ),
+};
+
+// CRM Types
+export interface CandidateNote {
+  id: string;
+  application_id: string;
+  admin_id: string;
+  note: string;
+  is_private: boolean;
+  created_at: string;
+  updated_at: string;
+  admin?: Admin;
+}
+
+export interface RelationshipTimelineItem {
+  type: string;
+  title: string;
+  description: string;
+  timestamp: string;
+  icon: string;
+  author?: string;
+  admin?: string;
+  sender?: string;
+  is_private?: boolean;
+}
+
+// CRM APIs
+export const crmAPI = {
+  // Notes
+  addNote: (applicationId: string, note: string, isPrivate: boolean) =>
+    api.post<{ message: string; note: CandidateNote }>("/crm/notes", {
+      application_id: applicationId,
+      note: note,
+      is_private: isPrivate,
+    }),
+  getNotes: (applicationId: string) =>
+    api.get<{ notes: CandidateNote[]; count: number }>(
+      `/crm/applications/${applicationId}/notes`
+    ),
+  updateNote: (noteId: string, note: string, isPrivate: boolean) =>
+    api.put<{ message: string; note: CandidateNote }>(`/crm/notes/${noteId}`, {
+      note: note,
+      is_private: isPrivate,
+    }),
+  deleteNote: (noteId: string) =>
+    api.delete<{ message: string }>(`/crm/notes/${noteId}`),
+
+  // Talent Pool
+  addToTalentPool: (applicationId: string) =>
+    api.post<{ message: string; application: Application }>(
+      "/crm/talent-pool",
+      { application_id: applicationId }
+    ),
+  removeFromTalentPool: (applicationId: string) =>
+    api.delete<{ message: string; application: Application }>(
+      `/crm/talent-pool/${applicationId}`
+    ),
+  getTalentPool: () =>
+    api.get<{ applications: Application[]; count: number }>("/crm/talent-pool"),
+
+  // Referral
+  updateReferral: (
+    applicationId: string,
+    referralSource: string,
+    referredByName: string,
+    referredByEmail: string,
+    referredByPhone: string
+  ) =>
+    api.put<{ message: string; application: Application }>(
+      `/crm/applications/${applicationId}/referral`,
+      {
+        referral_source: referralSource,
+        referred_by_name: referredByName,
+        referred_by_email: referredByEmail,
+        referred_by_phone: referredByPhone,
+      }
+    ),
+
+  // Timeline
+  getTimeline: (applicationId: string) =>
+    api.get<{ timeline: RelationshipTimelineItem[]; count: number }>(
+      `/crm/applications/${applicationId}/timeline`
     ),
 };
 
