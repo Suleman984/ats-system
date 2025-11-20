@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -67,15 +68,41 @@ func SubmitApplication(c *gin.Context) {
 	// Parse and store CV text for future searching (async)
 	go func() {
 		if application.ResumeURL != "" {
-			log.Printf("Parsing CV text for application %s", application.ID.String())
+			log.Printf("Parsing CV text for application %s (URL: %s)", application.ID.String(), application.ResumeURL)
 			cvText, err := services.ExtractTextFromURL(application.ResumeURL)
-			if err == nil && len(cvText) > 50 {
-				application.ParsedCVText = &cvText
-				config.DB.Model(&application).Update("parsed_cv_text", cvText)
-				log.Printf("CV text parsed and stored for %s (%d characters)", application.FullName, len(cvText))
-			} else {
-				log.Printf("Failed to parse CV text for %s: %v", application.Email, err)
+			if err != nil {
+				log.Printf("ERROR: Failed to parse CV text for %s (Email: %s, URL: %s): %v", 
+					application.FullName, application.Email, application.ResumeURL, err)
+				return
 			}
+			
+			if len(cvText) < 50 {
+				log.Printf("WARNING: CV text too short for %s (%d characters). URL: %s", 
+					application.FullName, len(cvText), application.ResumeURL)
+				return
+			}
+			
+			// Validate UTF-8 before saving
+			if !utf8.ValidString(cvText) {
+				log.Printf("ERROR: Extracted CV text is not valid UTF-8 for %s. Skipping save.", 
+					application.FullName)
+				return
+			}
+			
+			// Update using the application ID (more reliable than using the model)
+			updateErr := config.DB.Model(&models.Application{}).
+				Where("id = ?", application.ID).
+				Update("parsed_cv_text", cvText).Error
+			
+			if updateErr != nil {
+				log.Printf("ERROR: Failed to save parsed CV text to database for %s: %v", 
+					application.FullName, updateErr)
+			} else {
+				log.Printf("SUCCESS: CV text parsed and stored for %s (%d characters)", 
+					application.FullName, len(cvText))
+			}
+		} else {
+			log.Printf("WARNING: No ResumeURL provided for application %s", application.ID.String())
 		}
 	}()
 
@@ -165,19 +192,15 @@ func GetApplications(c *gin.Context) {
 	}
 	var applications []models.Application
 
-	// Get all applications for this company, including those whose jobs were deleted
-	// Strategy:
-	// 1. Get applications where job exists and belongs to company
-	// 2. If company_id column exists in applications, also get applications with NULL job_id for this company
-	// Note: After running ADD_COMPANY_ID_TO_APPLICATIONS.sql, this will work perfectly
+	// Get all applications for this company's ACTIVE jobs only
+	// Exclude applications where job_id IS NULL (deleted jobs) - these should not show in Applications tab
+	// But they will still be available in Find Candidates search
+	// Using INNER JOIN is optimized - automatically excludes NULL job_id and uses indexes
 	query := config.DB.Table("applications").
 		Select("applications.*").
-		Joins("LEFT JOIN jobs ON jobs.id = applications.job_id").
+		Joins("INNER JOIN jobs ON jobs.id = applications.job_id").
 		Where("jobs.company_id = ?", companyID).
 		Preload("Job")
-	
-	// If company_id column exists, also include applications with deleted jobs
-	// This will be handled automatically after migration adds company_id column
 
 	// Filter by job_id if provided
 	if jobID := c.Query("job_id"); jobID != "" {

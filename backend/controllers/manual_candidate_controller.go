@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -111,15 +112,41 @@ func AddManualCandidate(c *gin.Context) {
 	// Parse and store CV text (async)
 	go func() {
 		if application.ResumeURL != "" {
-			log.Printf("Parsing CV text for manually added candidate %s", application.ID.String())
+			log.Printf("Parsing CV text for manually added candidate %s (URL: %s)", application.ID.String(), application.ResumeURL)
 			cvText, err := services.ExtractTextFromURL(application.ResumeURL)
-			if err == nil && len(cvText) > 50 {
-				application.ParsedCVText = &cvText
-				config.DB.Model(&application).Update("parsed_cv_text", cvText)
-				log.Printf("CV text parsed and stored for %s (%d characters)", application.FullName, len(cvText))
-			} else {
-				log.Printf("Failed to parse CV text for %s: %v", application.Email, err)
+			if err != nil {
+				log.Printf("ERROR: Failed to parse CV text for %s (Email: %s, URL: %s): %v", 
+					application.FullName, application.Email, application.ResumeURL, err)
+				return
 			}
+			
+			if len(cvText) < 50 {
+				log.Printf("WARNING: CV text too short for %s (%d characters). URL: %s", 
+					application.FullName, len(cvText), application.ResumeURL)
+				return
+			}
+			
+			// Validate UTF-8 before saving
+			if !utf8.ValidString(cvText) {
+				log.Printf("ERROR: Extracted CV text is not valid UTF-8 for %s. Skipping save.", 
+					application.FullName)
+				return
+			}
+			
+			// Update using the application ID (more reliable than using the model)
+			updateErr := config.DB.Model(&models.Application{}).
+				Where("id = ?", application.ID).
+				Update("parsed_cv_text", cvText).Error
+			
+			if updateErr != nil {
+				log.Printf("ERROR: Failed to save parsed CV text to database for %s: %v", 
+					application.FullName, updateErr)
+			} else {
+				log.Printf("SUCCESS: CV text parsed and stored for %s (%d characters)", 
+					application.FullName, len(cvText))
+			}
+		} else {
+			log.Printf("WARNING: No ResumeURL provided for manually added application %s", application.ID.String())
 		}
 	}()
 

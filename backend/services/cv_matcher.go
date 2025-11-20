@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // Criteria defines the shortlisting criteria
@@ -64,18 +65,38 @@ func ExtractTextFromURL(cvURL string) (string, error) {
 	
 	// For PDFs - extract text (enhanced approach: multiple extraction methods)
 	if strings.Contains(contentType, "pdf") || strings.HasSuffix(cvURL, ".pdf") {
-		// Enhanced PDF text extraction - try multiple methods
-		text := extractTextFromPDF(fileBytes)
+		// Try extracting from PDF text objects first (BT/ET markers) - most reliable
+		text := extractTextFromPDFObjects(fileBytes)
 		
-		// If first method didn't work well, try fallback
-		if len(text) < 100 {
-			// Try extracting readable text from entire file
-			text = extractReadableText(fileBytes)
+		// Clean the text to remove PDF artifacts
+		text = cleanPDFText(text)
+		
+		// Validate extracted text
+		if len(text) > 100 && isValidUTF8(text) {
+			// Check if text looks like actual text (not binary garbage)
+			if isValidTextContent(text) {
+				return text, nil
+			}
 		}
 		
-		if len(text) > 100 {
+		// If first method didn't work, try extracting from PDF streams
+		text = extractTextFromPDF(fileBytes)
+		text = cleanPDFText(text) // Clean again
+		
+		if len(text) > 100 && isValidUTF8(text) {
+			if isValidTextContent(text) {
+				return text, nil
+			}
+		}
+		
+		// Last resort: try extracting readable text (but be very strict)
+		text = extractReadableText(fileBytes)
+		text = cleanPDFText(text) // Clean again
+		
+		if len(text) > 100 && isValidUTF8(text) && isValidTextContent(text) {
 			return text, nil
 		}
+		
 		// If extraction fails, return error with helpful message
 		return "", fmt.Errorf("could not extract text from PDF. Please ensure PDF contains readable text (not scanned images). For scanned PDFs, consider using OCR tools first.")
 	}
@@ -114,7 +135,7 @@ func extractTextFromPDF(data []byte) string {
 	// This is a basic implementation - for production, use a library like pdfcpu
 	text := ""
 	
-	// Look for text between stream markers
+	// Look for text between stream markers (but be careful - streams can be compressed)
 	streamStart := []byte("stream")
 	streamEnd := []byte("endstream")
 	
@@ -132,14 +153,206 @@ func extractTextFromPDF(data []byte) string {
 		}
 		endIdx += idx
 		
-		// Extract text from stream
+		// Extract text from stream (skip if it looks like compressed data)
 		streamData := data[idx+len(streamStart) : endIdx]
-		text += extractReadableText(streamData) + " "
+		
+		// Check if stream is compressed (FlateDecode, etc.) - skip those
+		// Look backwards from stream start for /Filter
+		streamHeader := data[max(0, idx-200):idx]
+		if strings.Contains(string(streamHeader), "/FlateDecode") || 
+		   strings.Contains(string(streamHeader), "/LZWDecode") ||
+		   strings.Contains(string(streamHeader), "/DCTDecode") {
+			// Compressed stream - skip
+			startIdx = endIdx + len(streamEnd)
+			continue
+		}
+		
+		// Try to extract readable text from stream
+		streamText := extractReadableText(streamData)
+		// Clean PDF artifacts from stream text
+		streamText = cleanPDFText(streamText)
+		if len(streamText) > 10 { // Only add if we got meaningful text
+			text += streamText + " "
+		}
 		
 		startIdx = endIdx + len(streamEnd)
 	}
 	
+	// Final cleanup
+	text = cleanPDFText(text)
 	return strings.TrimSpace(text)
+}
+
+// extractTextFromPDFObjects extracts text from PDF text objects (BT/ET markers)
+func extractTextFromPDFObjects(data []byte) string {
+	text := ""
+	
+	// Look for text objects: BT (Begin Text) ... ET (End Text)
+	btMarker := []byte("BT")
+	etMarker := []byte("ET")
+	
+	startIdx := 0
+	for {
+		btIdx := findBytes(data[startIdx:], btMarker)
+		if btIdx == -1 {
+			break
+		}
+		btIdx += startIdx
+		
+		etIdx := findBytes(data[btIdx:], etMarker)
+		if etIdx == -1 {
+			break
+		}
+		etIdx += btIdx
+		
+		// Extract text between BT and ET
+		textObj := data[btIdx+len(btMarker) : etIdx]
+		
+		// Look for text strings: (text) or <hex>
+		// Pattern: (text content) - this is the main PDF text format
+		parenPattern := regexp.MustCompile(`\(([^)]+)\)`)
+		matches := parenPattern.FindAllSubmatch(textObj, -1)
+		for _, match := range matches {
+			if len(match) > 1 {
+				textStr := string(match[1])
+				// Filter out PDF structure markers
+				if !isPDFStructureMarker(textStr) {
+					// Validate it's readable text
+					if isValidUTF8(textStr) && isValidTextContent(textStr) {
+						text += textStr + " "
+					}
+				}
+			}
+		}
+		
+		startIdx = etIdx + len(etMarker)
+	}
+	
+	// Clean the extracted text to remove PDF artifacts
+	cleanedText := cleanPDFText(text)
+	return strings.TrimSpace(cleanedText)
+}
+
+// isPDFStructureMarker checks if a string is a PDF structure marker (not actual content)
+func isPDFStructureMarker(s string) bool {
+	// Common PDF structure markers to filter out
+	markers := []string{
+		"Pg ", "endobj", "obj", "Type", "StructElem", "R ", "stream", "endstream",
+		"xref", "trailer", "startxref", "/Filter", "/Length", "/W", "/Font",
+		"/Subtype", "/Type", "/Resources", "/MediaBox", "/Contents",
+	}
+	
+	sLower := strings.ToLower(strings.TrimSpace(s))
+	for _, marker := range markers {
+		if strings.Contains(sLower, strings.ToLower(marker)) {
+			return true
+		}
+	}
+	
+	// Check for patterns like "Pg 7 0 R" or "84 0 R"
+	if matched, _ := regexp.MatchString(`^\d+\s+\d+\s*R$`, s); matched {
+		return true
+	}
+	
+	// Check for patterns like "0 obj" or "endobj"
+	if matched, _ := regexp.MatchString(`^\d+\s*obj$|^endobj$`, s); matched {
+		return true
+	}
+	
+	return false
+}
+
+// cleanPDFText removes PDF structure artifacts from extracted text
+func cleanPDFText(text string) string {
+	if text == "" {
+		return text
+	}
+	
+	// Remove common PDF structure patterns
+	patterns := []*regexp.Regexp{
+		regexp.MustCompile(`\bPg\s+\d+\s+\d+\s*R\b`),           // "Pg 7 0 R"
+		regexp.MustCompile(`\b\d+\s+\d+\s*R\b`),                // "84 0 R"
+		regexp.MustCompile(`\b\d+\s*obj\b`),                    // "32 0 obj"
+		regexp.MustCompile(`\bendobj\b`),                       // "endobj"
+		regexp.MustCompile(`\bType\s+StructElem\b`),            // "Type StructElem"
+		regexp.MustCompile(`\bStructElem\b`),                  // "StructElem"
+		regexp.MustCompile(`\bstream\b`),                       // "stream"
+		regexp.MustCompile(`\bendstream\b`),                   // "endstream"
+		regexp.MustCompile(`/\w+\s+\d+`),                       // "/Filter 5" or "/Length 123"
+		regexp.MustCompile(`\b\d+\s*0\s*obj\b`),               // "32 0 obj"
+		regexp.MustCompile(`\b\d+\s+0\s+R\s+endobj\b`),        // "32 0 R endobj"
+		regexp.MustCompile(`\bPg\s+\d+\s+0\s+R\s+endobj\b`),   // "Pg 7 0 R endobj"
+		regexp.MustCompile(`\b\d+\s+0\s+R\b`),                 // "84 0 R" (standalone)
+		regexp.MustCompile(`\b\d+\s+obj\s+Type\b`),            // "32 obj Type"
+		regexp.MustCompile(`\b\d+\s+0\s+obj\b`),               // "32 0 obj"
+	}
+	
+	cleaned := text
+	for _, pattern := range patterns {
+		cleaned = pattern.ReplaceAllString(cleaned, " ")
+	}
+	
+	// Remove patterns like "P 84 0 R" or "P 85 0 R" (PDF object references)
+	cleaned = regexp.MustCompile(`\bP\s+\d+\s+\d+\s*R\b`).ReplaceAllString(cleaned, " ")
+	
+	// Remove multiple spaces
+	cleaned = regexp.MustCompile(`\s+`).ReplaceAllString(cleaned, " ")
+	
+	// Remove leading/trailing spaces
+	cleaned = strings.TrimSpace(cleaned)
+	
+	return cleaned
+}
+
+// isValidTextContent checks if text looks like actual readable content
+func isValidTextContent(text string) bool {
+	if len(text) == 0 {
+		return false
+	}
+	
+	// Count letters vs non-letters
+	letterCount := 0
+	totalChars := 0
+	
+	for _, r := range text {
+		if unicode.IsLetter(r) {
+			letterCount++
+		}
+		if !unicode.IsSpace(r) {
+			totalChars++
+		}
+	}
+	
+	// If less than 30% are letters, it's probably not readable text
+	if totalChars > 0 && (letterCount*100/totalChars) < 30 {
+		return false
+	}
+	
+	// Check for common words (basic validation)
+	commonWords := []string{"the", "and", "or", "is", "are", "was", "were", "be", "been", "have", "has", "had"}
+	textLower := strings.ToLower(text)
+	foundWords := 0
+	for _, word := range commonWords {
+		if strings.Contains(textLower, word) {
+			foundWords++
+		}
+	}
+	
+	// If we found at least one common word, it's likely readable text
+	// Or if text is long enough and has reasonable letter ratio
+	if foundWords > 0 || (len(text) > 200 && letterCount > 50) {
+		return true
+	}
+	
+	return false
+}
+
+// max returns the maximum of two integers
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // extractTextFromDOCX extracts text from DOCX (ZIP-based format)
@@ -182,15 +395,25 @@ func extractTextFromDOCX(data []byte) string {
 }
 
 // extractReadableText extracts readable ASCII/Unicode text from binary data
+// IMPROVED: Better filtering to avoid storing binary PDF data
 func extractReadableText(data []byte) string {
 	var text strings.Builder
 	var word strings.Builder
+	validCharCount := 0
+	totalBytes := len(data)
+	
+	// Only process if we have reasonable amount of data
+	if totalBytes == 0 {
+		return ""
+	}
 	
 	for _, b := range data {
-		// Check if byte is printable ASCII or common Unicode
-		if unicode.IsPrint(rune(b)) || b == ' ' || b == '\n' || b == '\r' || b == '\t' {
-			if unicode.IsLetter(rune(b)) || unicode.IsDigit(rune(b)) || b == ' ' || b == '-' || b == '_' {
+		// Only accept valid ASCII printable characters (0x20-0x7E) and common whitespace
+		// This prevents binary PDF data from being stored
+		if (b >= 0x20 && b <= 0x7E) || b == '\n' || b == '\r' || b == '\t' {
+			if unicode.IsLetter(rune(b)) || unicode.IsDigit(rune(b)) || b == ' ' || b == '-' || b == '_' || b == '.' || b == ',' {
 				word.WriteByte(b)
+				validCharCount++
 			} else if word.Len() > 0 {
 				// End of word
 				wordStr := word.String()
@@ -216,7 +439,30 @@ func extractReadableText(data []byte) string {
 		text.WriteString(word.String())
 	}
 	
-	return strings.TrimSpace(text.String())
+	result := strings.TrimSpace(text.String())
+	
+	// Validate: If less than 5% of bytes were valid text, this is likely binary data
+	if totalBytes > 0 && (validCharCount*100/totalBytes) < 5 {
+		return "" // Likely binary data, return empty
+	}
+	
+	// Validate UTF-8 encoding
+	if !isValidUTF8(result) {
+		return "" // Invalid UTF-8, return empty
+	}
+	
+	return result
+}
+
+// isValidUTF8 checks if a string is valid UTF-8
+func isValidUTF8(s string) bool {
+	// Try to convert to runes - if it fails, it's not valid UTF-8
+	for _, r := range s {
+		if r == utf8.RuneError {
+			return false
+		}
+	}
+	return true
 }
 
 // findBytes finds byte sequence in data

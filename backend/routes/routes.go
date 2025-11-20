@@ -58,6 +58,10 @@ func SetupRoutes(router *gin.Engine) {
 			
 			// Manual Candidate routes
 			protected.POST("/candidates/manual", controllers.AddManualCandidate)
+			
+			// CV Reparsing routes (for fixing existing applications)
+			protected.POST("/candidates/reparse-all", controllers.ReparseAllCVs)
+			protected.POST("/candidates/:id/reparse", controllers.ReparseSingleCV)
 		}
 
 		// Super Admin protected routes

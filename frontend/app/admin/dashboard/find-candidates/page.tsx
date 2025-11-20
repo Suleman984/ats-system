@@ -368,9 +368,9 @@ export default function FindCandidatesPage() {
                           </ul>
                         </div>
                       )}
-                      {result.application.Job && (
+                      {result.application.job && (
                         <p className="text-xs text-gray-500 mt-2">
-                          Applied for: {result.application.Job.title}
+                          Applied for: {result.application.job.title || "N/A"}
                         </p>
                       )}
                     </div>
