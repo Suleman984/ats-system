@@ -288,6 +288,19 @@ export const applicationAPI = {
       "/applications/bulk-delete",
       { status }
     ),
+  trackCVView: (id: string) =>
+    api.post<{ message: string; application: Application }>(
+      `/applications/${id}/track-cv-view`
+    ),
+  getMessages: (id: string) =>
+    api.get<{ messages: Message[]; count: number }>(
+      `/applications/${id}/messages`
+    ),
+  sendMessage: (id: string, message: string) =>
+    api.post<{ message: string; data: Message }>(
+      `/applications/${id}/messages`,
+      { message }
+    ),
 };
 
 // Candidate Portal Types
@@ -296,14 +309,39 @@ export interface ApplicationStatus {
   full_name: string;
   email: string;
   status: string;
+  status_label?: string;
   applied_at: string;
   reviewed_at?: string;
+  cv_viewed_at?: string;
+  last_status_update?: string;
+  expected_response_date?: string;
+  expected_response_days?: number;
   score: number;
+  unread_messages?: number;
+  status_history?: Array<{
+    status: string;
+    label: string;
+    timestamp: string;
+    completed: boolean;
+  }>;
+  can_message?: boolean;
   job: {
     id: string;
     title: string;
     company_name?: string;
   };
+}
+
+export interface Message {
+  id: string;
+  application_id: string;
+  sender_type: "candidate" | "recruiter";
+  sender_id?: string;
+  sender_email: string;
+  message: string;
+  is_read: boolean;
+  read_at?: string;
+  created_at: string;
 }
 
 // Candidate Portal APIs (public, no auth - use separate axios instance)
@@ -323,6 +361,22 @@ export const candidatePortalAPI = {
     publicApi.get<{ applications: ApplicationStatus[]; count: number }>(
       "/candidate/applications",
       { params: { email } }
+    ),
+  sendMessage: (applicationId: string, email: string, message: string) =>
+    publicApi.post<{ message: string; data: Message }>(
+      "/candidate/messages/send",
+      {
+        application_id: applicationId,
+        sender_email: email,
+        message: message,
+      }
+    ),
+  getMessages: (applicationId: string, email: string) =>
+    publicApi.get<{ messages: Message[]; count: number }>(
+      "/candidate/messages",
+      {
+        params: { application_id: applicationId, email },
+      }
     ),
 };
 

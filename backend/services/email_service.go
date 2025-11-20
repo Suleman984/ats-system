@@ -196,12 +196,15 @@ func sendEmail(to, subject, htmlBody string) error {
 	}
 }
 
-func SendConfirmationEmail(to, name, jobTitle string) error {
+func SendConfirmationEmail(to, name, jobTitle, applicationID string) error {
 	// Get frontend URL from environment or use default
 	frontendURL := os.Getenv("FRONTEND_URL")
 	if frontendURL == "" {
 		frontendURL = "http://localhost:3000"
 	}
+	
+	// Create direct link to application status with pre-filled email and application ID
+	statusLink := fmt.Sprintf("%s/application-status?email=%s&applicationId=%s", frontendURL, to, applicationID)
 	
 	subject := "Application Received - " + jobTitle
 	html := fmt.Sprintf(`
@@ -215,18 +218,25 @@ func SendConfirmationEmail(to, name, jobTitle string) error {
 				<h2 style="color: #2563eb;">Hello %s,</h2>
 				<p>Thank you for applying to the <strong>%s</strong> position.</p>
 				<p>We have received your application and will review it shortly.</p>
-				<p>You can check your application status anytime by visiting our candidate portal:</p>
+				<p>You can check your application status anytime using the link below:</p>
 				<p style="text-align: center; margin: 20px 0;">
-					<a href="%s/application-status" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">Check Application Status</a>
+					<a href="%s" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">Check Application Status</a>
 				</p>
-				<p style="font-size: 12px; color: #666;">You'll need your email address (%s) to check your status.</p>
+				<p style="font-size: 12px; color: #666; text-align: center;">
+					Or copy this link: <br>
+					<a href="%s" style="color: #2563eb; word-break: break-all;">%s</a>
+				</p>
+				<p style="font-size: 12px; color: #666; margin-top: 20px;">
+					<strong>Application ID:</strong> %s<br>
+					You'll need this along with your email (%s) to check your status in the future.
+				</p>
 				<p>You will hear from us soon!</p>
 				<br>
 				<p>Best regards,<br>The Hiring Team</p>
 			</div>
 		</body>
 		</html>
-	`, name, jobTitle, frontendURL, to)
+	`, name, jobTitle, statusLink, statusLink, statusLink, applicationID, to)
 
 	return sendEmail(to, subject, html)
 }
@@ -295,6 +305,11 @@ func SendRejectionEmail(to, name, jobTitle string) error {
 		</html>
 	`, name, jobTitle, frontendURL)
 
+	return sendEmail(to, subject, html)
+}
+
+// SendCustomEmail sends a custom email with provided subject and HTML body
+func SendCustomEmail(to, subject, html string) error {
 	return sendEmail(to, subject, html)
 }
 

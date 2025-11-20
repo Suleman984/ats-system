@@ -1,345 +1,359 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import { candidatePortalAPI, ApplicationStatus } from "@/lib/api";
+import { toast } from "@/components/Toast";
+import { useSearchParams } from "next/navigation";
 
 export default function ApplicationStatusPage() {
   const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [applicationId, setApplicationId] = useState("");
-  const [applications, setApplications] = useState<ApplicationStatus[]>([]);
+  const [application, setApplication] = useState<ApplicationStatus | null>(
+    null
+  );
+  // Messaging functionality commented out for now
+  // const [messages, setMessages] = useState<Message[]>([]);
+  // const [newMessage, setNewMessage] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [searchMethod, setSearchMethod] = useState<"email" | "id">("email");
+  // const [messagesLoading, setMessagesLoading] = useState(false);
+  // const [showMessages, setShowMessages] = useState(false);
 
-  // Auto-fill email from URL params if available
+  // Pre-fill email and application ID from URL parameters
   useEffect(() => {
-    const emailParam = searchParams.get("email");
-    if (emailParam) {
-      setEmail(emailParam);
-      setSearchMethod("email");
+    const emailParam = searchParams?.get("email");
+    const applicationIdParam = searchParams?.get("applicationId");
+    if (emailParam) setEmail(emailParam);
+    if (applicationIdParam) setApplicationId(applicationIdParam);
+
+    // Auto-check status if both are provided
+    if (emailParam && applicationIdParam) {
+      handleCheckStatus(emailParam, applicationIdParam);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
-  // Auto-search when email is set from URL
-  useEffect(() => {
-    const emailParam = searchParams.get("email");
-    if (emailParam && email === emailParam) {
-      // Small delay to ensure state is set
-      const timer = setTimeout(() => {
-        handleSearchByEmail();
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [email, searchParams]);
+  const handleCheckStatus = async (
+    emailParam?: string,
+    applicationIdParam?: string
+  ) => {
+    const emailToUse = emailParam || email;
+    const applicationIdToUse = applicationIdParam || applicationId;
 
-  const handleSearchByEmail = async () => {
-    if (!email) {
-      setError("Please enter your email address");
+    if (!emailToUse || !applicationIdToUse) {
+      toast.error("Please enter both email and application ID");
       return;
     }
 
     setLoading(true);
-    setError("");
-    try {
-      const response = await candidatePortalAPI.getByEmail(email);
-      setApplications(response.data.applications || []);
-      if (response.data.applications.length === 0) {
-        setError("No applications found for this email address.");
-      }
-    } catch (err: any) {
-      setError(
-        err.response?.data?.error ||
-          "Failed to fetch applications. Please try again."
-      );
-      setApplications([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSearchById = async () => {
-    if (!email || !applicationId) {
-      setError("Please enter both email and application ID");
-      return;
-    }
-
-    setLoading(true);
-    setError("");
     try {
       const response = await candidatePortalAPI.checkStatus(
-        email,
-        applicationId
+        emailToUse,
+        applicationIdToUse
       );
-      setApplications([response.data.application]);
-    } catch (err: any) {
-      setError(
-        err.response?.data?.error ||
-          "Application not found. Please check your details."
+      setApplication(response.data.application);
+      // Messaging functionality commented out for now
+      // loadMessages();
+    } catch (error: any) {
+      console.error("Failed to check status:", error);
+      toast.error(
+        error.response?.data?.error ||
+          "Failed to load application status. Please check your email and application ID."
       );
-      setApplications([]);
+      setApplication(null);
     } finally {
       setLoading(false);
     }
   };
 
+  // Messaging functionality commented out for now
+  // const loadMessages = async () => {
+  //   if (!email || !applicationId) return;
+  //   setMessagesLoading(true);
+  //   try {
+  //     const response = await candidatePortalAPI.getMessages(applicationId, email);
+  //     setMessages(response.data.messages);
+  //   } catch (error: any) {
+  //     console.error("Failed to load messages:", error);
+  //   } finally {
+  //     setMessagesLoading(false);
+  //   }
+  // };
+
+  // const handleSendMessage = async () => {
+  //   if (!newMessage.trim() || !email || !applicationId) {
+  //     toast.error("Please enter a message");
+  //     return;
+  //   }
+  //   try {
+  //     await candidatePortalAPI.sendMessage(applicationId, email, newMessage.trim());
+  //     setNewMessage("");
+  //     toast.success("Message sent successfully!");
+  //     loadMessages();
+  //     if (application) {
+  //       const response = await candidatePortalAPI.checkStatus(email, applicationId);
+  //       setApplication(response.data.application);
+  //     }
+  //   } catch (error: any) {
+  //     console.error("Failed to send message:", error);
+  //     toast.error(error.response?.data?.error || "Failed to send message. Please try again.");
+  //   }
+  // };
+
   const getStatusColor = (status: string) => {
-    switch (status.toLowerCase()) {
+    switch (status) {
       case "shortlisted":
         return "bg-green-100 text-green-800 border-green-300";
       case "rejected":
         return "bg-red-100 text-red-800 border-red-300";
-      case "pending":
+      case "cv_viewed":
+        return "bg-blue-100 text-blue-800 border-blue-300";
+      case "under_review":
         return "bg-yellow-100 text-yellow-800 border-yellow-300";
+      case "interview_scheduled":
+        return "bg-purple-100 text-purple-800 border-purple-300";
       default:
         return "bg-gray-100 text-gray-800 border-gray-300";
     }
   };
 
   const getStatusIcon = (status: string) => {
-    switch (status.toLowerCase()) {
+    switch (status) {
       case "shortlisted":
-        return "✅";
+        return "✓";
       case "rejected":
-        return "❌";
-      case "pending":
-        return "⏳";
-      default:
+        return "✗";
+      case "cv_viewed":
+        return "👁️";
+      case "under_review":
         return "📋";
+      case "interview_scheduled":
+        return "📅";
+      default:
+        return "⏳";
     }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-12 px-4">
+    <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-4xl mx-auto">
-        <div className="bg-white rounded-lg shadow-xl p-8 mb-8">
-          <h1 className="text-4xl font-bold text-center mb-2 text-gray-800">
-            📋 Application Status
-          </h1>
-          <p className="text-center text-gray-600 mb-8">
-            Check the status of your job application
+        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+          <h1 className="text-3xl font-bold mb-2">Application Status Portal</h1>
+          <p className="text-gray-600 mb-6">
+            Enter your email and application ID to check your application status
           </p>
 
-          {/* Search Method Toggle */}
-          <div className="flex justify-center gap-4 mb-6">
-            <button
-              onClick={() => {
-                setSearchMethod("email");
-                setApplications([]);
-                setError("");
-              }}
-              className={`px-4 py-2 rounded-lg font-medium ${
-                searchMethod === "email"
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-200 text-gray-700"
-              }`}
-            >
-              Search by Email
-            </button>
-            <button
-              onClick={() => {
-                setSearchMethod("id");
-                setApplications([]);
-                setError("");
-              }}
-              className={`px-4 py-2 rounded-lg font-medium ${
-                searchMethod === "id"
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-200 text-gray-700"
-              }`}
-            >
-              Search by Application ID
-            </button>
-          </div>
-
-          {/* Search Form */}
-          <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
-              <label className="block text-sm font-medium mb-2">
-                Email Address *
-              </label>
+              <label className="block text-sm font-medium mb-2">Email</label>
               <input
                 type="email"
-                className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                className="w-full px-4 py-2 border rounded-lg"
                 placeholder="your.email@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
             </div>
-
-            {searchMethod === "id" && (
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  Application ID *
-                </label>
-                <input
-                  type="text"
-                  className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                  placeholder="Enter your application ID"
-                  value={applicationId}
-                  onChange={(e) => setApplicationId(e.target.value)}
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  You received this in your confirmation email
-                </p>
-              </div>
-            )}
-
-            {error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-                {error}
-              </div>
-            )}
-
-            <button
-              onClick={
-                searchMethod === "email"
-                  ? handleSearchByEmail
-                  : handleSearchById
-              }
-              disabled={loading}
-              className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 disabled:bg-blue-300 font-semibold"
-            >
-              {loading ? "Searching..." : "🔍 Check Status"}
-            </button>
-          </div>
-        </div>
-
-        {/* Results */}
-        {applications.length > 0 && (
-          <div className="bg-white rounded-lg shadow-xl p-8">
-            <h2 className="text-2xl font-bold mb-6">
-              Your Applications ({applications.length})
-            </h2>
-            <div className="space-y-4">
-              {applications.map((app) => (
-                <div
-                  key={app.id}
-                  className="border-2 rounded-lg p-6 hover:shadow-md transition"
-                >
-                  <div className="flex justify-between items-start mb-4">
-                    <div className="flex-1">
-                      <h3 className="text-xl font-semibold mb-2">
-                        {app.job.title}
-                      </h3>
-                      <p className="text-sm text-gray-600 mb-1">
-                        Application ID:{" "}
-                        <code className="bg-gray-100 px-2 py-1 rounded text-xs">
-                          {app.id}
-                        </code>
-                      </p>
-                      <p className="text-sm text-gray-600">
-                        Applied on:{" "}
-                        {new Date(app.applied_at).toLocaleDateString("en-US", {
-                          year: "numeric",
-                          month: "long",
-                          day: "numeric",
-                        })}
-                      </p>
-                      {app.reviewed_at && (
-                        <p className="text-sm text-gray-600">
-                          Reviewed on:{" "}
-                          {new Date(app.reviewed_at).toLocaleDateString(
-                            "en-US",
-                            {
-                              year: "numeric",
-                              month: "long",
-                              day: "numeric",
-                            }
-                          )}
-                        </p>
-                      )}
-                      {app.score > 0 && (
-                        <p className="text-sm text-gray-600 mt-1">
-                          Match Score:{" "}
-                          <span className="font-semibold">{app.score}%</span>
-                        </p>
-                      )}
-                    </div>
-                    <div
-                      className={`px-4 py-2 rounded-lg border-2 font-semibold flex items-center gap-2 ${getStatusColor(
-                        app.status
-                      )}`}
-                    >
-                      <span className="text-xl">
-                        {getStatusIcon(app.status)}
-                      </span>
-                      <span className="capitalize">{app.status}</span>
-                    </div>
-                  </div>
-
-                  {/* Status Messages */}
-                  <div className="mt-4 p-4 rounded-lg">
-                    {app.status.toLowerCase() === "pending" && (
-                      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                        <p className="text-yellow-800">
-                          <strong>⏳ Your application is under review.</strong>
-                          <br />
-                          We're currently reviewing your application. You'll be
-                          notified via email once a decision has been made.
-                        </p>
-                      </div>
-                    )}
-                    {app.status.toLowerCase() === "shortlisted" && (
-                      <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                        <p className="text-green-800">
-                          <strong>
-                            🎉 Congratulations! You've been shortlisted!
-                          </strong>
-                          <br />
-                          Your application has been selected for further review.
-                          Our team will be in touch with you soon regarding the
-                          next steps.
-                        </p>
-                      </div>
-                    )}
-                    {app.status.toLowerCase() === "rejected" && (
-                      <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                        <p className="text-red-800">
-                          <strong>Thank you for your interest.</strong>
-                          <br />
-                          After careful consideration, we've decided to move
-                          forward with other candidates at this time. We
-                          appreciate your time and encourage you to apply for
-                          future opportunities.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Application ID
+              </label>
+              <input
+                type="text"
+                className="w-full px-4 py-2 border rounded-lg"
+                placeholder="Application ID"
+                value={applicationId}
+                onChange={(e) => setApplicationId(e.target.value)}
+              />
             </div>
           </div>
-        )}
 
-        {/* Help Section */}
-        <div className="bg-white rounded-lg shadow-xl p-8 mt-8">
-          <h3 className="text-xl font-semibold mb-4">💡 Need Help?</h3>
-          <div className="space-y-2 text-gray-600">
-            <p>
-              <strong>Can't find your application?</strong>
-            </p>
-            <ul className="list-disc list-inside space-y-1 ml-4">
-              <li>
-                Make sure you're using the same email address you used when
-                applying
-              </li>
-              <li>Check your confirmation email for your Application ID</li>
-              <li>
-                If you applied recently, it may take a few minutes to appear
-              </li>
-            </ul>
-            <p className="mt-4">
-              <strong>Didn't receive a confirmation email?</strong>
-            </p>
-            <ul className="list-disc list-inside space-y-1 ml-4">
-              <li>Check your spam/junk folder</li>
-              <li>Verify the email address you used</li>
-              <li>Contact the company directly if the issue persists</li>
-            </ul>
-          </div>
+          <button
+            onClick={() => handleCheckStatus()}
+            disabled={loading}
+            className="w-full bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:bg-blue-300 font-semibold"
+          >
+            {loading ? "Loading..." : "Check Status"}
+          </button>
         </div>
+
+        {application && (
+          <>
+            {/* Status Card */}
+            <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-2xl font-bold">Application Status</h2>
+                <span
+                  className={`px-4 py-2 rounded-full text-sm font-semibold border ${getStatusColor(
+                    application.status
+                  )}`}
+                >
+                  {getStatusIcon(application.status)}{" "}
+                  {application.status_label || application.status}
+                </span>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <h3 className="font-semibold text-lg mb-2">
+                    {application.job.title}
+                  </h3>
+                  <p className="text-gray-600">
+                    Applied on:{" "}
+                    {new Date(application.applied_at).toLocaleDateString()}
+                  </p>
+                </div>
+
+                {application.expected_response_days !== undefined &&
+                  application.expected_response_days > 0 && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                      <p className="text-blue-800 font-semibold">
+                        📅 Expected Response: You'll hear from us within{" "}
+                        {application.expected_response_days} day
+                        {application.expected_response_days !== 1 ? "s" : ""}
+                      </p>
+                      {application.expected_response_date && (
+                        <p className="text-blue-600 text-sm mt-1">
+                          By:{" "}
+                          {new Date(
+                            application.expected_response_date
+                          ).toLocaleDateString()}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                {/* Status Timeline */}
+                {application.status_history && (
+                  <div className="mt-6">
+                    <h3 className="font-semibold mb-4">Application Timeline</h3>
+                    <div className="space-y-3">
+                      {application.status_history.map((step, index) => (
+                        <div key={index} className="flex items-start gap-3">
+                          <div
+                            className={`w-8 h-8 rounded-full flex items-center justify-center font-semibold ${
+                              step.completed
+                                ? "bg-green-500 text-white"
+                                : "bg-gray-300 text-gray-600"
+                            }`}
+                          >
+                            {step.completed ? "✓" : index + 1}
+                          </div>
+                          <div className="flex-1">
+                            <p
+                              className={`font-medium ${
+                                step.completed
+                                  ? "text-gray-900"
+                                  : "text-gray-500"
+                              }`}
+                            >
+                              {step.label}
+                            </p>
+                            <p className="text-sm text-gray-500">
+                              {new Date(step.timestamp).toLocaleString()}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Messages Section - Commented out for now */}
+                {/* {application.can_message && (
+                  <div className="mt-6 border-t pt-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="font-semibold text-lg">
+                        Messages{" "}
+                        {application.unread_messages &&
+                          application.unread_messages > 0 && (
+                            <span className="ml-2 bg-red-500 text-white text-xs px-2 py-1 rounded-full">
+                              {application.unread_messages} new
+                            </span>
+                          )}
+                      </h3>
+                      <button
+                        onClick={() => {
+                          setShowMessages(!showMessages);
+                          if (!showMessages) {
+                            loadMessages();
+                          }
+                        }}
+                        className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                      >
+                        {showMessages ? "Hide" : "Show"} Messages
+                      </button>
+                    </div>
+
+                    {showMessages && (
+                      <div className="space-y-4">
+                        <div className="max-h-96 overflow-y-auto space-y-3 border rounded-lg p-4 bg-gray-50">
+                          {messagesLoading ? (
+                            <p className="text-center text-gray-500">
+                              Loading messages...
+                            </p>
+                          ) : messages.length === 0 ? (
+                            <p className="text-center text-gray-500">
+                              No messages yet. Start a conversation!
+                            </p>
+                          ) : (
+                            messages.map((msg) => (
+                              <div
+                                key={msg.id}
+                                className={`p-3 rounded-lg ${
+                                  msg.sender_type === "candidate"
+                                    ? "bg-blue-100 ml-8"
+                                    : "bg-white mr-8"
+                                }`}
+                              >
+                                <div className="flex justify-between items-start mb-1">
+                                  <p className="font-semibold text-sm">
+                                    {msg.sender_type === "candidate"
+                                      ? "You"
+                                      : "Recruiter"}
+                                  </p>
+                                  <p className="text-xs text-gray-500">
+                                    {new Date(msg.created_at).toLocaleString()}
+                                  </p>
+                                </div>
+                                <p className="text-gray-800">{msg.message}</p>
+                              </div>
+                            ))
+                          )}
+                        </div>
+
+                        <div className="flex gap-2">
+                          <textarea
+                            className="flex-1 px-4 py-2 border rounded-lg resize-none"
+                            placeholder="Type your message..."
+                            rows={3}
+                            value={newMessage}
+                            onChange={(e) => setNewMessage(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && e.ctrlKey) {
+                                handleSendMessage();
+                              }
+                            }}
+                          />
+                          <button
+                            onClick={handleSendMessage}
+                            disabled={!newMessage.trim()}
+                            className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 disabled:bg-blue-300 font-semibold"
+                          >
+                            Send
+                          </button>
+                        </div>
+                        <p className="text-xs text-gray-500">
+                          Press Ctrl+Enter to send
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )} */}
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

@@ -162,13 +162,13 @@ func SubmitApplication(c *gin.Context) {
 			application.FullName, application.Email, application.ID.String(), analysisResult.MatchScore)
 	}()
 
-	// Send confirmation email (async with error logging)
+	// Send confirmation email with application status link (async with error logging)
 	go func() {
 		log.Printf("Sending confirmation email to %s for job %s", application.Email, job.Title)
-		if err := services.SendConfirmationEmail(application.Email, application.FullName, job.Title); err != nil {
+		if err := services.SendConfirmationEmail(application.Email, application.FullName, job.Title, application.ID.String()); err != nil {
 			log.Printf("ERROR: Failed to send confirmation email to %s: %v", application.Email, err)
 		} else {
-			log.Printf("SUCCESS: Confirmation email sent to %s", application.Email)
+			log.Printf("SUCCESS: Confirmation email sent to %s with application status link", application.Email)
 		}
 	}()
 
@@ -278,6 +278,10 @@ func ShortlistApplication(c *gin.Context) {
 	now := time.Now()
 	application.Status = "shortlisted"
 	application.ReviewedAt = &now
+	application.LastStatusUpdate = &now
+	// Set expected response date (5 days from now)
+	expectedDate := now.AddDate(0, 0, 5)
+	application.ExpectedResponseDate = &expectedDate
 
 	if err := config.DB.Save(&application).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update application"})
@@ -297,13 +301,22 @@ func ShortlistApplication(c *gin.Context) {
 
 	services.LogApplicationStatusChanged(companyUUID, adminUUID, applicationUUID, application.FullName, jobTitle, oldStatus, "shortlisted")
 
-	// Send shortlist email (async with error logging)
+	// Send shortlist email and SMS (async with error logging)
 	go func() {
 		log.Printf("Sending shortlist email to %s for application %s", application.Email, applicationID)
 		if err := services.SendShortlistEmail(application.Email, application.FullName, jobTitle); err != nil {
 			log.Printf("ERROR: Failed to send shortlist email to %s: %v", application.Email, err)
 		} else {
 			log.Printf("SUCCESS: Shortlist email sent to %s", application.Email)
+		}
+		
+		// Send SMS notification
+		if application.Phone != "" {
+			if err := services.SendStatusUpdateSMS(application.Phone, application.FullName, jobTitle, "shortlisted"); err != nil {
+				log.Printf("ERROR: Failed to send shortlist SMS to %s: %v", application.Phone, err)
+			} else {
+				log.Printf("SUCCESS: Shortlist SMS sent to %s", application.Phone)
+			}
 		}
 	}()
 
@@ -347,6 +360,7 @@ func RejectApplication(c *gin.Context) {
 	now := time.Now()
 	application.Status = "rejected"
 	application.ReviewedAt = &now
+	application.LastStatusUpdate = &now
 
 	if err := config.DB.Save(&application).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update application"})
@@ -366,13 +380,22 @@ func RejectApplication(c *gin.Context) {
 
 	services.LogApplicationStatusChanged(companyUUID, adminUUID, applicationUUID, application.FullName, jobTitle, oldStatus, "rejected")
 
-	// Send rejection email (async with error logging)
+	// Send rejection email and SMS (async with error logging)
 	go func() {
 		log.Printf("Sending rejection email to %s", application.Email)
 		if err := services.SendRejectionEmail(application.Email, application.FullName, jobTitle); err != nil {
 			log.Printf("ERROR: Failed to send rejection email to %s: %v", application.Email, err)
 		} else {
 			log.Printf("SUCCESS: Rejection email sent to %s", application.Email)
+		}
+		
+		// Send SMS notification
+		if application.Phone != "" {
+			if err := services.SendStatusUpdateSMS(application.Phone, application.FullName, jobTitle, "rejected"); err != nil {
+				log.Printf("ERROR: Failed to send rejection SMS to %s: %v", application.Phone, err)
+			} else {
+				log.Printf("SUCCESS: Rejection SMS sent to %s", application.Phone)
+			}
 		}
 	}()
 
@@ -543,6 +566,97 @@ func BulkDeleteApplications(c *gin.Context) {
 		"message": fmt.Sprintf("Deleted %d application(s) with status '%s'", deletedCount, req.Status),
 		"deleted_count": deletedCount,
 		"total_found": len(applications),
+	})
+}
+
+// TrackCVView tracks when a recruiter views a candidate's CV
+// Updates status to "cv_viewed" if currently "pending"
+func TrackCVView(c *gin.Context) {
+	applicationID := c.Param("id")
+	companyIDVal, exists := c.Get("company_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+		return
+	}
+	companyID, ok := companyIDVal.(string)
+	if !ok || companyID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
+		return
+	}
+
+	var application models.Application
+	// Verify application belongs to company (even if job is deleted)
+	err := config.DB.Table("applications").
+		Select("applications.*").
+		Joins("LEFT JOIN jobs ON jobs.id = applications.job_id").
+		Where("applications.id = ? AND (applications.company_id = ? OR jobs.company_id = ?)", applicationID, companyID, companyID).
+		Preload("Job").
+		First(&application).Error
+
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Application not found"})
+		return
+	}
+
+	// Get admin ID
+	adminIDVal, _ := c.Get("admin_id")
+	adminIDStr, _ := adminIDVal.(string)
+	adminUUID, _ := uuid.Parse(adminIDStr)
+
+	now := time.Now()
+	oldStatus := application.Status
+	statusChanged := false
+
+	// If CV hasn't been viewed yet, mark it as viewed
+	if application.CVViewedAt == nil {
+		application.CVViewedAt = &now
+		application.CVViewedBy = &adminUUID
+		statusChanged = true
+	}
+
+	// If status is "pending", update to "cv_viewed"
+	if application.Status == "pending" {
+		application.Status = "cv_viewed"
+		application.LastStatusUpdate = &now
+		// Set expected response date (5 days from now)
+		expectedDate := now.AddDate(0, 0, 5)
+		application.ExpectedResponseDate = &expectedDate
+		statusChanged = true
+	}
+
+	if statusChanged {
+		if err := config.DB.Save(&application).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update application"})
+			return
+		}
+
+		// Log CV view
+		companyUUID, _ := uuid.Parse(companyID)
+		applicationUUID, _ := uuid.Parse(applicationID)
+		jobTitle := "Unknown Job (Job Deleted)"
+		if application.JobID != nil && application.Job.ID != uuid.Nil {
+			jobTitle = application.Job.Title
+		}
+
+		if oldStatus != application.Status {
+			services.LogApplicationStatusChanged(companyUUID, adminUUID, applicationUUID, application.FullName, jobTitle, oldStatus, application.Status)
+		}
+
+		// Send SMS notification if status changed (async)
+		if application.Status == "cv_viewed" && application.Phone != "" {
+			go func() {
+				if err := services.SendStatusUpdateSMS(application.Phone, application.FullName, jobTitle, "cv_viewed"); err != nil {
+					log.Printf("ERROR: Failed to send CV viewed SMS to %s: %v", application.Phone, err)
+				} else {
+					log.Printf("SUCCESS: CV viewed SMS sent to %s", application.Phone)
+				}
+			}()
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":     "CV view tracked",
+		"application": application,
 	})
 }
 

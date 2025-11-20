@@ -345,7 +345,20 @@ export default function ApplicationsPage() {
                                   href={app.resume_url}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  onClick={() => setOpenDropdown(null)}
+                                  onClick={async () => {
+                                    setOpenDropdown(null);
+                                    // Track CV view
+                                    try {
+                                      await applicationAPI.trackCVView(app.id);
+                                      // Refresh applications to update status
+                                      fetchData();
+                                    } catch (error) {
+                                      console.error(
+                                        "Failed to track CV view:",
+                                        error
+                                      );
+                                    }
+                                  }}
                                   className="block px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 transition-colors"
                                 >
                                   📄 View CV

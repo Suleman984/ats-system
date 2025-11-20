@@ -26,6 +26,10 @@ type Application struct {
 	AppliedAt          time.Time  `json:"applied_at"`
 	ReviewedAt         *time.Time `json:"reviewed_at,omitempty"`
 	ReviewedBy         *uuid.UUID `gorm:"type:uuid" json:"reviewed_by,omitempty"`
+	CVViewedAt         *time.Time `json:"cv_viewed_at,omitempty"` // When recruiter first viewed CV
+	CVViewedBy         *uuid.UUID `gorm:"type:uuid" json:"cv_viewed_by,omitempty"` // Admin who viewed CV
+	ExpectedResponseDate *time.Time `gorm:"type:date" json:"expected_response_date,omitempty"` // Expected response date
+	LastStatusUpdate   *time.Time `json:"last_status_update,omitempty"` // Last time status was updated
 
 	// Relations
 	Job Job `gorm:"foreignKey:JobID" json:"job,omitempty"`

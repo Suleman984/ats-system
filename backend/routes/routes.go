@@ -19,6 +19,8 @@ func SetupRoutes(router *gin.Engine) {
 		// Candidate Portal routes (public)
 		api.POST("/candidate/status", controllers.GetApplicationStatus)
 		api.GET("/candidate/applications", controllers.GetApplicationStatusByEmail)
+		api.POST("/candidate/messages/send", controllers.SendMessage)
+		api.GET("/candidate/messages", controllers.GetMessages)
 		
 		// File upload routes (public for application submission)
 		api.POST("/upload/cv", controllers.UploadCV)
@@ -42,8 +44,13 @@ func SetupRoutes(router *gin.Engine) {
 			protected.GET("/applications", controllers.GetApplications)
 			protected.PUT("/applications/:id/shortlist", controllers.ShortlistApplication)
 			protected.PUT("/applications/:id/reject", controllers.RejectApplication)
+			protected.POST("/applications/:id/track-cv-view", controllers.TrackCVView)
 			protected.DELETE("/applications/:id", controllers.DeleteApplication)
 			protected.POST("/applications/bulk-delete", controllers.BulkDeleteApplications)
+			
+			// Messaging routes (protected)
+			protected.POST("/applications/:id/messages", controllers.SendMessage)
+			protected.GET("/applications/:id/messages", controllers.GetMessagesForRecruiter)
 			
 			// AI Shortlisting routes
 			protected.POST("/applications/ai-shortlist", controllers.AIShortlistApplication)

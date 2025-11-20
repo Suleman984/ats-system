@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { candidateSearchAPI, CandidateSearchResult } from "@/lib/api";
+import {
+  candidateSearchAPI,
+  CandidateSearchResult,
+  applicationAPI,
+} from "@/lib/api";
 import { toast } from "@/components/Toast";
 
 export default function FindCandidatesPage() {
@@ -368,17 +372,28 @@ export default function FindCandidatesPage() {
                           </ul>
                         </div>
                       )}
-                      {result.application.job && (
+                      {/* {result.application.job && (
                         <p className="text-xs text-gray-500 mt-2">
                           Applied for: {result.application.job.title || "N/A"}
                         </p>
-                      )}
+                      )} */}
                     </div>
                     <div className="flex flex-col gap-2 ml-4">
                       <a
                         href={result.application.resume_url}
                         target="_blank"
                         rel="noopener noreferrer"
+                        onClick={async () => {
+                          // Track CV view
+                          try {
+                            await applicationAPI.trackCVView(
+                              result.application.id
+                            );
+                            toast.success("CV view tracked");
+                          } catch (error) {
+                            console.error("Failed to track CV view:", error);
+                          }
+                        }}
                         className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 text-center"
                       >
                         View CV
