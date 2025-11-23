@@ -152,6 +152,16 @@ func GetJobs(c *gin.Context) {
 	}
 	var jobs []models.Job
 
+	// Auto-close expired jobs for this company before fetching
+	// A job is considered expired if its deadline date is before today's date.
+	today := time.Now().UTC().Format("2006-01-02")
+	if err := config.DB.
+		Model(&models.Job{}).
+		Where("company_id = ? AND status = ? AND deadline < ?", companyID, "open", today).
+		Update("status", "closed").Error; err != nil {
+		log.Printf("GetJobs: failed to auto-close expired jobs for company %s: %v", companyID, err)
+	}
+
 	query := config.DB.Where("company_id = ?", companyID)
 
 	// Filter by status if provided
