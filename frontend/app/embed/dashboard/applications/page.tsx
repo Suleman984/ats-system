@@ -385,7 +385,8 @@ export default function ApplicationsPage() {
                                     💼 LinkedIn
                                   </a>
                                 )}
-                                {app.status === "pending" && (
+                                {(app.status === "pending" ||
+                                  app.status === "cv_viewed") && (
                                   <>
                                     <div className="border-t border-gray-200 my-1"></div>
                                     <button

@@ -595,7 +595,8 @@ export default function ApplicationsPage() {
                                     "🔍 Analyze CV"
                                   )}
                                 </button>
-                                {app.status === "pending" && (
+                                {(app.status === "pending" ||
+                                  app.status === "cv_viewed") && (
                                   <>
                                     <button
                                       onClick={(e) => {
