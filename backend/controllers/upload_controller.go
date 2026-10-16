@@ -1,147 +1,83 @@
 package controllers
 
 import (
-	"ats-backend/services"
-	"fmt"
+	"bytes"
+	"io"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strings"
 
+	"ats-backend/services"
+
 	"github.com/gin-gonic/gin"
 )
 
-const (
-	maxFileSize      = 10 * 1024 * 1024 // 10MB
-	cvBucketName      = "resumes"
-	portfolioBucketName = "portfolios"
+const maxUploadSize = 10 << 20
+
+type fileKind struct {
+	magic       []byte
+	contentType string
+}
+
+var (
+	pdfKind  = fileKind{[]byte("%PDF"), "application/pdf"}
+	zipMagic = []byte("PK\x03\x04")
+	oleMagic = []byte{0xD0, 0xCF, 0x11, 0xE0}
+
+	cvTypes = map[string]fileKind{
+		".pdf":  pdfKind,
+		".doc":  {oleMagic, "application/msword"},
+		".docx": {zipMagic, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+	}
+	portfolioTypes = map[string]fileKind{
+		".pdf": pdfKind,
+		".zip": {zipMagic, "application/zip"},
+		".rar": {[]byte("Rar!"), "application/x-rar-compressed"},
+		".7z":  {[]byte{'7', 'z', 0xBC, 0xAF, 0x27, 0x1C}, "application/x-7z-compressed"},
+	}
 )
 
-// UploadCV handles CV/resume file upload
 func UploadCV(c *gin.Context) {
-	file, header, err := c.Request.FormFile("file")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No file provided"})
-		return
-	}
-	defer file.Close()
-
-	// Validate file type
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-	allowedExts := []string{".pdf", ".doc", ".docx"}
-	allowed := false
-	for _, allowedExt := range allowedExts {
-		if ext == allowedExt {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid file type. Only PDF, DOC, and DOCX files are allowed",
-		})
-		return
-	}
-
-	// Validate file size
-	if header.Size > maxFileSize {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": fmt.Sprintf("File size exceeds maximum allowed size of %d MB", maxFileSize/(1024*1024)),
-		})
-		return
-	}
-
-	// Upload to Supabase Storage
-	publicURL, err := services.UploadFileToSupabase(file, header.Filename, cvBucketName)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to upload file",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"message":  "File uploaded successfully",
-		"file_url": publicURL,
-	})
+	handleUpload(c, "resumes", cvTypes, "PDF, DOC or DOCX")
 }
 
-// UploadPortfolio handles portfolio file upload
 func UploadPortfolio(c *gin.Context) {
+	handleUpload(c, "portfolios", portfolioTypes, "PDF, ZIP, RAR or 7Z")
+}
+
+// handleUpload checks extension and file signature before storing the file.
+func handleUpload(c *gin.Context, bucket string, allowed map[string]fileKind, allowedLabel string) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUploadSize+1<<20)
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "No file provided"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No file provided or file exceeds 10 MB"})
 		return
 	}
 	defer file.Close()
 
-	// Validate file type
 	ext := strings.ToLower(filepath.Ext(header.Filename))
-	allowedExts := []string{".pdf", ".zip", ".rar", ".7z"}
-	allowed := false
-	for _, allowedExt := range allowedExts {
-		if ext == allowedExt {
-			allowed = true
-			break
-		}
-	}
-	if !allowed {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid file type. Only PDF, ZIP, RAR, and 7Z files are allowed",
-		})
+	kind, ok := allowed[ext]
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid file type. Allowed: " + allowedLabel})
 		return
 	}
 
-	// Validate file size
-	if header.Size > maxFileSize {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": fmt.Sprintf("File size exceeds maximum allowed size of %d MB", maxFileSize/(1024*1024)),
-		})
+	data, err := io.ReadAll(io.LimitReader(file, maxUploadSize+1))
+	if err != nil || len(data) > maxUploadSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File exceeds the 10 MB limit"})
+		return
+	}
+	if !bytes.HasPrefix(data, kind.magic) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File content does not match its extension"})
 		return
 	}
 
-	// Upload to Supabase Storage
-	publicURL, err := services.UploadFileToSupabase(file, header.Filename, portfolioBucketName)
+	fileURL, err := services.UploadFile(data, ext, kind.contentType, bucket)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to upload file",
-			"details": err.Error(),
-		})
+		log.Printf("upload to %s: %v", bucket, err)
+		serverError(c, "Failed to upload file")
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"message":  "File uploaded successfully",
-		"file_url": publicURL,
-	})
+	c.JSON(http.StatusOK, gin.H{"message": "File uploaded successfully", "file_url": fileURL})
 }
-
-// GetFileURL returns the public URL for a file (if URL is provided, returns as-is)
-func GetFileURL(c *gin.Context) {
-	var req struct {
-		URL      string `json:"url"`
-		Filename string `json:"filename"`
-		Bucket   string `json:"bucket"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	// If URL is provided and is a valid URL, return it as-is
-	if req.URL != "" && (strings.HasPrefix(req.URL, "http://") || strings.HasPrefix(req.URL, "https://")) {
-		c.JSON(http.StatusOK, gin.H{"file_url": req.URL})
-		return
-	}
-
-	// Otherwise, construct URL from bucket and filename
-	if req.Bucket == "" || req.Filename == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Either URL or bucket+filename must be provided"})
-		return
-	}
-
-	publicURL := services.GetPublicURL(req.Bucket, req.Filename)
-	c.JSON(http.StatusOK, gin.H{"file_url": publicURL})
-}
-

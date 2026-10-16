@@ -18,7 +18,6 @@ export default function DashboardLayout({
 
   useEffect(() => {
     setMounted(true);
-    // Check auth on mount (client-side only)
     checkAuth();
   }, [checkAuth]);
 

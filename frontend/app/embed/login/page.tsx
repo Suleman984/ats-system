@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { authAPI } from "@/lib/api";
+import { authAPI, errorMessage } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
 
-export default function EmbeddedLoginPage() {
+function EmbeddedLogin() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const login = useAuthStore((state) => state.login);
@@ -17,7 +17,6 @@ export default function EmbeddedLoginPage() {
   const [loading, setLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
 
-  // Get company_id from URL
   const urlCompanyId = searchParams.get("company_id");
 
   useEffect(() => {
@@ -44,13 +43,12 @@ export default function EmbeddedLoginPage() {
 
       login(response.data.admin, response.data.token);
 
-      // Redirect to dashboard with company_id
       const redirectUrl = urlCompanyId
         ? `/embed/dashboard?company_id=${urlCompanyId}`
         : `/embed/dashboard?company_id=${loggedInCompanyId}`;
       router.push(redirectUrl);
-    } catch (err: any) {
-      setError(err.response?.data?.error || "Login failed");
+    } catch (err) {
+      setError(errorMessage(err, "Login failed"));
     } finally {
       setLoading(false);
     }
@@ -104,5 +102,13 @@ export default function EmbeddedLoginPage() {
         </form>
       </div>
     </div>
+  );
+}
+
+export default function EmbeddedLoginPage() {
+  return (
+    <Suspense>
+      <EmbeddedLogin />
+    </Suspense>
   );
 }

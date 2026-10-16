@@ -6,12 +6,12 @@ import (
 	"github.com/google/uuid"
 )
 
+// EmailLog is reserved for delivery tracking; nothing writes to it yet.
 type EmailLog struct {
-	ID            uuid.UUID  `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
+	ID            uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	ApplicationID *uuid.UUID `gorm:"type:uuid" json:"application_id,omitempty"`
-	EmailType     string     `gorm:"size:50" json:"email_type"`
-	SentTo        string     `gorm:"size:255" json:"sent_to"`
+	EmailType     string     `json:"email_type"`
+	SentTo        string     `json:"sent_to"`
 	SentAt        time.Time  `json:"sent_at"`
-	Status        string     `gorm:"size:50" json:"status"`
+	Status        string     `json:"status"`
 }
-

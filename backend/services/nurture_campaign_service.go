@@ -1,166 +1,81 @@
 package services
 
 import (
+	"fmt"
+	"html"
+	"log"
+	"time"
+
 	"ats-backend/config"
 	"ats-backend/models"
-	"log"
-	"os"
-	"time"
 
 	"github.com/google/uuid"
 )
 
-// SendJobAlert sends a job alert email to a candidate in the talent pool
-func SendJobAlert(applicationID, jobID string, candidateEmail, candidateName, jobTitle string) error {
-	frontendURL := os.Getenv("FRONTEND_URL")
-	if frontendURL == "" {
-		frontendURL = "http://localhost:3000"
-	}
+// Talent-pool nurture emails. Not yet scheduled: wire ProcessMonthlyNurtureCampaigns to a cron to enable.
 
-	subject := "New Opportunity: " + jobTitle
-	html := `
-		<!DOCTYPE html>
-		<html>
-		<head>
-			<meta charset="UTF-8">
-		</head>
-		<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-			<div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-				<h2 style="color: #2563eb;">Hello ` + candidateName + `,</h2>
-				<p>We have a new opportunity that might interest you!</p>
-				<p>Based on your previous application, we think you might be a great fit for:</p>
-				<div style="background-color: #f3f4f6; padding: 15px; border-radius: 5px; margin: 20px 0;">
-					<h3 style="margin: 0; color: #2563eb;">` + jobTitle + `</h3>
-				</div>
-				<p>If you're interested, you can apply directly through our portal:</p>
-				<p style="text-align: center; margin: 20px 0;">
-					<a href="` + frontendURL + `/jobs/public" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">View Job Details</a>
-				</p>
-				<p style="font-size: 12px; color: #666;">
-					You're receiving this because you're in our talent pool. 
-					<a href="` + frontendURL + `/application-status">Update your preferences</a> to customize these alerts.
-				</p>
-				<br>
-				<p>Best regards,<br>The Hiring Team</p>
-			</div>
-		</body>
-		</html>
-	`
+const nurtureInterval = 30 * 24 * time.Hour
 
-	if err := SendCustomEmail(candidateEmail, subject, html); err != nil {
-		return err
-	}
-
-	// Log the campaign
-	appUUID, _ := uuid.Parse(applicationID)
-	jobUUID, _ := uuid.Parse(jobID)
-	
-	campaign := models.NurtureCampaign{
-		ApplicationID: appUUID,
-		JobID:         &jobUUID,
-		EmailSentAt:   time.Now(),
-		EmailType:     "job_alert",
-		Subject:       subject,
-		Status:        "sent",
-		CreatedAt:     time.Now(),
-	}
-
-	if err := config.DB.Create(&campaign).Error; err != nil {
-		log.Printf("ERROR: Failed to log nurture campaign: %v", err)
-	}
-
-	return nil
+func careersURL(companyID uuid.UUID) string {
+	return config.FrontendURL() + "/jobs/" + companyID.String()
 }
 
-// SendMonthlyCheckIn sends a monthly check-in email to candidates in talent pool
-func SendMonthlyCheckIn(applicationID, candidateEmail, candidateName string) error {
-	frontendURL := os.Getenv("FRONTEND_URL")
-	if frontendURL == "" {
-		frontendURL = "http://localhost:3000"
-	}
+func SendJobAlert(app *models.Application, job *models.Job) error {
+	subject := "New Opportunity: " + job.Title
+	body := fmt.Sprintf(`<p>Based on your previous application, we think you might be a great fit for:</p>
+    <div style="background-color: #f3f4f6; padding: 15px; border-radius: 5px; margin: 20px 0;">
+      <h3 style="margin: 0; color: #2563eb;">%s</h3>
+    </div>
+    <p style="font-size: 12px; color: #666;">You're receiving this because you're in our talent pool.</p>`,
+		html.EscapeString(job.Title))
 
+	if err := SendEmail(app.Email, subject,
+		renderEmail("Hello "+app.FullName+",", "#2563eb", body, "View Job Details", careersURL(job.CompanyID))); err != nil {
+		return err
+	}
+	return logCampaign(app.ID, &job.ID, "job_alert", subject)
+}
+
+func SendMonthlyCheckIn(app *models.Application) error {
 	subject := "Stay in Touch - New Opportunities Available"
-	html := `
-		<!DOCTYPE html>
-		<html>
-		<head>
-			<meta charset="UTF-8">
-		</head>
-		<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-			<div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-				<h2 style="color: #2563eb;">Hello ` + candidateName + `,</h2>
-				<p>We wanted to check in and let you know that we have new opportunities available!</p>
-				<p>We keep you in our talent pool because we believe you have great potential. Check out our latest job openings:</p>
-				<p style="text-align: center; margin: 20px 0;">
-					<a href="` + frontendURL + `/jobs/public" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">View Open Positions</a>
-				</p>
-				<p style="font-size: 12px; color: #666;">
-					You're receiving this monthly update because you're in our talent pool. 
-					<a href="` + frontendURL + `/application-status">Update your preferences</a> to customize these alerts.
-				</p>
-				<br>
-				<p>Best regards,<br>The Hiring Team</p>
-			</div>
-		</body>
-		</html>
-	`
+	body := `<p>We keep you in our talent pool because we believe you have great potential.
+    Check out our latest openings.</p>
+    <p style="font-size: 12px; color: #666;">You're receiving this monthly update because you're in our talent pool.</p>`
 
-	if err := SendCustomEmail(candidateEmail, subject, html); err != nil {
+	if err := SendEmail(app.Email, subject,
+		renderEmail("Hello "+app.FullName+",", "#2563eb", body, "View Open Positions", careersURL(app.CompanyID))); err != nil {
 		return err
 	}
-
-	// Log the campaign
-	appUUID, _ := uuid.Parse(applicationID)
-	
-	campaign := models.NurtureCampaign{
-		ApplicationID: appUUID,
-		EmailSentAt:   time.Now(),
-		EmailType:     "check_in",
-		Subject:       subject,
-		Status:        "sent",
-		CreatedAt:     time.Now(),
-	}
-
-	if err := config.DB.Create(&campaign).Error; err != nil {
-		log.Printf("ERROR: Failed to log nurture campaign: %v", err)
-	}
-
-	return nil
+	return logCampaign(app.ID, nil, "check_in", subject)
 }
 
-// ProcessMonthlyNurtureCampaigns processes all talent pool candidates and sends monthly check-ins
-// This should be run as a scheduled job (cron)
+func logCampaign(applicationID uuid.UUID, jobID *uuid.UUID, emailType, subject string) error {
+	return config.DB.Create(&models.NurtureCampaign{
+		ApplicationID: applicationID,
+		JobID:         jobID,
+		EmailSentAt:   time.Now(),
+		EmailType:     emailType,
+		Subject:       subject,
+		Status:        "sent",
+	}).Error
+}
+
+// ProcessMonthlyNurtureCampaigns emails talent-pool candidates not checked in with for 30 days.
 func ProcessMonthlyNurtureCampaigns() error {
-	// Get all candidates in talent pool who haven't been contacted in the last 30 days
-	thirtyDaysAgo := time.Now().AddDate(0, 0, -30)
-
+	cutoff := time.Now().Add(-nurtureInterval)
 	var applications []models.Application
-	err := config.DB.Where("in_talent_pool = true").
-		Where("talent_pool_added_at < ? OR talent_pool_added_at IS NULL", thirtyDaysAgo).
+	err := config.DB.Omit("parsed_cv_text").
+		Where("in_talent_pool AND (talent_pool_added_at IS NULL OR talent_pool_added_at < ?)", cutoff).
+		Where("NOT EXISTS (SELECT 1 FROM nurture_campaigns n WHERE n.application_id = applications.id AND n.email_type = 'check_in' AND n.email_sent_at > ?)", cutoff).
 		Find(&applications).Error
-
 	if err != nil {
 		return err
 	}
 
-	log.Printf("Processing monthly nurture campaigns for %d candidates", len(applications))
-
-	for _, app := range applications {
-		// Check if we've sent a check-in in the last 30 days
-		var recentCampaign models.NurtureCampaign
-		err := config.DB.Where("application_id = ? AND email_type = 'check_in' AND email_sent_at > ?", 
-			app.ID, thirtyDaysAgo).First(&recentCampaign).Error
-
-		// If no recent campaign, send check-in
-		if err != nil {
-			if err := SendMonthlyCheckIn(app.ID.String(), app.Email, app.FullName); err != nil {
-				log.Printf("ERROR: Failed to send monthly check-in to %s: %v", app.Email, err)
-			} else {
-				log.Printf("SUCCESS: Monthly check-in sent to %s", app.Email)
-			}
+	for i := range applications {
+		if err := SendMonthlyCheckIn(&applications[i]); err != nil {
+			log.Printf("nurture check-in for application %s: %v", applications[i].ID, err)
 		}
 	}
-
 	return nil
 }
-

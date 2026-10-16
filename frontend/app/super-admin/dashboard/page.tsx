@@ -3,13 +3,25 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSuperAdminStore } from "@/lib/store";
-import { superAdminAPI, SuperAdminStats } from "@/lib/api";
+import { superAdminAPI, SuperAdminStats, errorMessage } from "@/lib/api";
+import { toast } from "@/components/Toast";
 import Link from "next/link";
 export default function SuperAdminDashboardPage() {
   const router = useRouter();
   const { isAuthenticated } = useSuperAdminStore();
   const [stats, setStats] = useState<SuperAdminStats | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const fetchStats = async () => {
+    try {
+      const response = await superAdminAPI.getStats();
+      setStats(response.data.stats);
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to fetch stats"));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -18,17 +30,6 @@ export default function SuperAdminDashboardPage() {
     }
     fetchStats();
   }, [isAuthenticated, router]);
-
-  const fetchStats = async () => {
-    try {
-      const response = await superAdminAPI.getStats();
-      setStats(response.data.stats);
-    } catch (error) {
-      console.error("Failed to fetch stats:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   if (loading) {
     return (

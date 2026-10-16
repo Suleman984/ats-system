@@ -9,80 +9,80 @@ import (
 	"github.com/google/uuid"
 )
 
-// DateOnly is a custom type for date-only values (YYYY-MM-DD)
+const dateLayout = "2006-01-02"
+
+// DateOnly stores a calendar date and serializes as YYYY-MM-DD.
 type DateOnly struct {
 	time.Time
 }
 
-// UnmarshalJSON implements json.Unmarshaler for DateOnly
-func (d *DateOnly) UnmarshalJSON(data []byte) error {
-	// Remove quotes if present
-	dateStr := string(data)
-	if len(dateStr) >= 2 && dateStr[0] == '"' && dateStr[len(dateStr)-1] == '"' {
-		dateStr = dateStr[1 : len(dateStr)-1]
-	}
-	
-	parsed, err := time.Parse("2006-01-02", dateStr)
+func ParseDateOnly(s string) (DateOnly, error) {
+	t, err := time.Parse(dateLayout, s)
 	if err != nil {
-		return fmt.Errorf("invalid date format: %s, expected YYYY-MM-DD", dateStr)
+		return DateOnly{}, fmt.Errorf("invalid date %q, expected YYYY-MM-DD", s)
 	}
-	
-	d.Time = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, time.UTC)
+	return DateOnly{t}, nil
+}
+
+func (d *DateOnly) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	parsed, err := ParseDateOnly(s)
+	if err != nil {
+		return err
+	}
+	*d = parsed
 	return nil
 }
 
-// MarshalJSON implements json.Marshaler for DateOnly
 func (d DateOnly) MarshalJSON() ([]byte, error) {
-	return json.Marshal(d.Time.Format("2006-01-02"))
+	return json.Marshal(d.Format(dateLayout))
 }
 
-// Value implements driver.Valuer for database storage
 func (d DateOnly) Value() (driver.Value, error) {
-	return d.Time.Format("2006-01-02"), nil
+	return d.Format(dateLayout), nil
 }
 
-// Scan implements sql.Scanner for database retrieval
-func (d *DateOnly) Scan(value interface{}) error {
-	if value == nil {
-		d.Time = time.Time{}
-		return nil
-	}
-	
+func (d *DateOnly) Scan(value any) error {
 	switch v := value.(type) {
+	case nil:
+		d.Time = time.Time{}
 	case time.Time:
 		d.Time = time.Date(v.Year(), v.Month(), v.Day(), 0, 0, 0, 0, time.UTC)
-		return nil
 	case string:
-		parsed, err := time.Parse("2006-01-02", v)
+		parsed, err := ParseDateOnly(v)
 		if err != nil {
 			return err
 		}
-		d.Time = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, time.UTC)
-		return nil
+		*d = parsed
 	case []byte:
 		return d.Scan(string(v))
 	default:
 		return fmt.Errorf("cannot scan %T into DateOnly", value)
 	}
+	return nil
 }
 
 type Job struct {
-	ID               uuid.UUID  `gorm:"type:uuid;primary_key;default:gen_random_uuid()" json:"id"`
-	CompanyID        uuid.UUID  `gorm:"type:uuid;not null" json:"company_id"`
-	Title            string     `gorm:"size:255;not null" json:"title"`
-	Description      string     `gorm:"type:text;not null" json:"description"`
-	Requirements     string     `gorm:"type:text" json:"requirements"`
-	Location         string     `gorm:"size:255" json:"location"`
-	JobType          string     `gorm:"size:50" json:"job_type"`
-	SalaryRange      string     `gorm:"size:100" json:"salary_range"`
-	Deadline         DateOnly   `gorm:"type:date;not null" json:"deadline"`
-	Status           string     `gorm:"size:50;default:'open'" json:"status"`
-	AutoShortlist    bool       `gorm:"default:true" json:"auto_shortlist"`
+	ID                uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	CompanyID         uuid.UUID `gorm:"type:uuid" json:"company_id"`
+	Title             string    `json:"title"`
+	Description       string    `json:"description"`
+	Requirements      string    `json:"requirements"`
+	Location          string    `json:"location"`
+	JobType           string    `json:"job_type"`
+	SalaryRange       string    `json:"salary_range"`
+	Deadline          DateOnly  `gorm:"type:date" json:"deadline"`
+	Status            string    `gorm:"default:open" json:"status"`
+	AutoShortlist     bool      `json:"auto_shortlist"`
 	ShortlistCriteria *string   `gorm:"type:jsonb" json:"shortlist_criteria,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
-
-	// Relations
-	Applications []Application `gorm:"foreignKey:JobID" json:"applications,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
+// Closed reports whether the job no longer accepts applications.
+func (j *Job) Closed(now time.Time) bool {
+	return j.Status != "open" || !now.Before(j.Deadline.AddDate(0, 0, 1))
+}

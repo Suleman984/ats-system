@@ -1,178 +1,114 @@
 package controllers
 
 import (
-	"ats-backend/config"
-	"ats-backend/models"
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
+	"ats-backend/config"
+	"ats-backend/models"
+
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
-// CheckApplicationStatusRequest for candidate portal
-type CheckApplicationStatusRequest struct {
-	Email         string `json:"email" binding:"required,email"`
-	ApplicationID string `json:"application_id" binding:"required"`
+var statusLabels = map[string]string{
+	models.StatusPending:     "Application Pending",
+	models.StatusCVViewed:    "CV Viewed",
+	models.StatusShortlisted: "Shortlisted",
+	models.StatusRejected:    "Not Selected",
 }
 
-// GetApplicationStatus returns application status for candidates (public endpoint)
-func GetApplicationStatus(c *gin.Context) {
-	var req CheckApplicationStatusRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	var application models.Application
-	err := config.DB.Where("id = ? AND email = ?", req.ApplicationID, req.Email).
-		Preload("Job").
-		First(&application).Error
-
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": "Application not found. Please check your email and application ID.",
-		})
-		return
-	}
-
-	// Get unread message count
-	var unreadCount int64
-	config.DB.Model(&models.Message{}).
-		Where("application_id = ? AND sender_type = 'recruiter' AND is_read = false", application.ID).
-		Count(&unreadCount)
-
-	// Get status timeline/history
-	statusHistory := []gin.H{
-		{
-			"status":    "pending",
-			"label":     "Application Submitted",
-			"timestamp": application.AppliedAt,
-			"completed": application.Status != "pending",
-		},
-	}
-
-	if application.CVViewedAt != nil {
-		statusHistory = append(statusHistory, gin.H{
-			"status":    "cv_viewed",
-			"label":     "CV Viewed",
-			"timestamp": application.CVViewedAt,
-			"completed": true,
-		})
-	}
-
-	if application.Status == "shortlisted" || application.Status == "rejected" {
-		statusHistory = append(statusHistory, gin.H{
-			"status":    application.Status,
-			"label":     getStatusLabel(application.Status),
-			"timestamp": application.ReviewedAt,
-			"completed": true,
-		})
-	}
-
-	// Calculate expected response date
-	var expectedResponseDate *time.Time
-	var expectedResponseDays int
-	if application.ExpectedResponseDate != nil {
-		expectedResponseDate = application.ExpectedResponseDate
-		daysUntil := int(time.Until(*expectedResponseDate).Hours() / 24)
-		if daysUntil > 0 {
-			expectedResponseDays = daysUntil
-		}
-	} else if application.Status == "pending" || application.Status == "cv_viewed" {
-		// Default: 5 days from last status update or applied date
-		baseDate := application.AppliedAt
-		if application.LastStatusUpdate != nil {
-			baseDate = *application.LastStatusUpdate
-		}
-		defaultDate := baseDate.AddDate(0, 0, 5)
-		expectedResponseDate = &defaultDate
-		expectedResponseDays = int(time.Until(defaultDate).Hours() / 24)
-	}
-
-	// Return enhanced status information
-	c.JSON(http.StatusOK, gin.H{
-		"application": gin.H{
-			"id":                    application.ID,
-			"full_name":             application.FullName,
-			"email":                 application.Email,
-			"status":                application.Status,
-			"status_label":          getStatusLabel(application.Status),
-			"applied_at":            application.AppliedAt,
-			"reviewed_at":           application.ReviewedAt,
-			"cv_viewed_at":          application.CVViewedAt,
-			"last_status_update":    application.LastStatusUpdate,
-			"expected_response_date": expectedResponseDate,
-			"expected_response_days": expectedResponseDays,
-			"score":                 application.Score,
-			"unread_messages":       unreadCount,
-			"status_history":        statusHistory,
-			"can_message":           true, // Candidates can always message
-			"job": gin.H{
-				"id":    application.Job.ID,
-				"title": application.Job.Title,
-			},
-		},
-	})
-}
-
-// GetApplicationStatusByEmail returns all applications for an email (public endpoint)
-func GetApplicationStatusByEmail(c *gin.Context) {
-	email := c.Query("email")
-	if email == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Email is required"})
-		return
-	}
-
-	var applications []models.Application
-	err := config.DB.Where("email = ?", email).
-		Preload("Job").
-		Order("applied_at DESC").
-		Find(&applications).Error
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch applications"})
-		return
-	}
-
-	// Return simplified application info (no sensitive data)
-	results := []gin.H{}
-	for _, app := range applications {
-		results = append(results, gin.H{
-			"id":         app.ID,
-			"full_name":  app.FullName,
-			"status":     app.Status,
-			"applied_at": app.AppliedAt,
-			"reviewed_at": app.ReviewedAt,
-			"job": gin.H{
-				"id":    app.Job.ID,
-				"title": app.Job.Title,
-			},
-		})
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"applications": results,
-		"count":       len(results),
-	})
-}
-
-// getStatusLabel returns a human-readable label for status
-func getStatusLabel(status string) string {
-	labels := map[string]string{
-		"pending":            "Application Pending",
-		"cv_viewed":          "CV Viewed",
-		"under_review":       "Under Review",
-		"shortlisted":        "Shortlisted",
-		"rejected":           "Not Selected",
-		"interview_scheduled": "Interview Scheduled",
-		"decision_pending":   "Decision Pending",
-	}
-	if label, ok := labels[status]; ok {
+func statusLabel(status string) string {
+	if label, ok := statusLabels[status]; ok {
 		return label
 	}
 	return status
 }
 
+// findCandidateApplication authenticates a candidate by application ID plus email.
+func findCandidateApplication(c *gin.Context, applicationID uuid.UUID, email string) (*models.Application, bool) {
+	var app models.Application
+	err := config.DB.Preload("Job").Omit("parsed_cv_text").
+		Where("id = ? AND lower(email) = ?", applicationID, strings.ToLower(email)).
+		First(&app).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Application not found. Please check your email and application ID."})
+		return nil, false
+	}
+	if err != nil {
+		serverError(c, "Failed to load application")
+		return nil, false
+	}
+	return &app, true
+}
 
+func GetApplicationStatus(c *gin.Context) {
+	var req struct {
+		Email         string    `json:"email" binding:"required,email"`
+		ApplicationID uuid.UUID `json:"application_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		badRequest(c, err)
+		return
+	}
+	app, ok := findCandidateApplication(c, req.ApplicationID, req.Email)
+	if !ok {
+		return
+	}
 
+	var unread int64
+	config.DB.Model(&models.Message{}).
+		Where("application_id = ? AND sender_type = ? AND is_read = false", app.ID, models.SenderRecruiter).
+		Count(&unread)
 
+	history := []gin.H{{
+		"status": models.StatusPending, "label": "Application Submitted",
+		"timestamp": app.AppliedAt, "completed": app.Status != models.StatusPending,
+	}}
+	if app.CVViewedAt != nil {
+		history = append(history, gin.H{"status": models.StatusCVViewed, "label": "CV Viewed", "timestamp": app.CVViewedAt, "completed": true})
+	}
+	if app.Status == models.StatusShortlisted || app.Status == models.StatusRejected {
+		history = append(history, gin.H{"status": app.Status, "label": statusLabel(app.Status), "timestamp": app.ReviewedAt, "completed": true})
+	}
+
+	expected := app.ExpectedResponseDate
+	if expected == nil && (app.Status == models.StatusPending || app.Status == models.StatusCVViewed) {
+		base := app.AppliedAt
+		if app.LastStatusUpdate != nil {
+			base = *app.LastStatusUpdate
+		}
+		expected = ptr(base.Add(expectedResponseWindow))
+	}
+	expectedDays := 0
+	if expected != nil {
+		expectedDays = max(0, int(time.Until(*expected).Hours()/24))
+	}
+
+	job := gin.H{"id": nil, "title": app.JobTitle()}
+	if app.Job != nil {
+		job["id"] = app.Job.ID
+	}
+
+	c.JSON(http.StatusOK, gin.H{"application": gin.H{
+		"id":                     app.ID,
+		"full_name":              app.FullName,
+		"email":                  app.Email,
+		"status":                 app.Status,
+		"status_label":           statusLabel(app.Status),
+		"applied_at":             app.AppliedAt,
+		"reviewed_at":            app.ReviewedAt,
+		"cv_viewed_at":           app.CVViewedAt,
+		"last_status_update":     app.LastStatusUpdate,
+		"expected_response_date": expected,
+		"expected_response_days": expectedDays,
+		"score":                  app.Score,
+		"unread_messages":        unread,
+		"status_history":         history,
+		"can_message":            true,
+		"job":                    job,
+	}})
+}

@@ -2,11 +2,11 @@
 
 import { useAuthStore } from "@/lib/store";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 
 // Embedded layout - minimal styling for iframe integration
-export default function EmbeddedDashboardLayout({
+function EmbeddedDashboardShell({
   children,
 }: {
   children: React.ReactNode;
@@ -36,7 +36,6 @@ export default function EmbeddedDashboardLayout({
     }
   }, [isAuthenticated, initialized, mounted, router, urlCompanyId]);
 
-  // Helper to add company_id to URLs
   const getUrlWithCompanyId = (path: string) => {
     if (urlCompanyId) {
       return `${path}${
@@ -204,5 +203,14 @@ function MobileNavLink({
     >
       {children}
     </Link>
+  );
+}
+
+// useSearchParams needs a Suspense boundary so embedded pages can prerender.
+export default function EmbeddedDashboardLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense>
+      <EmbeddedDashboardShell>{children}</EmbeddedDashboardShell>
+    </Suspense>
   );
 }

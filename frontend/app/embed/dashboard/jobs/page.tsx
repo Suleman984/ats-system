@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { jobAPI, Job } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { jobAPI, Job, errorMessage } from "@/lib/api";
 import Link from "next/link";
 import { toast } from "@/components/Toast";
 
@@ -10,22 +10,22 @@ export default function JobsPage() {
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState("");
 
-  useEffect(() => {
-    fetchJobs();
-  }, [filterStatus]);
-
-  const fetchJobs = async () => {
+  const fetchJobs = useCallback(async () => {
     try {
       const response = await jobAPI.getAll(
         filterStatus ? { status: filterStatus } : undefined
       );
       setJobs(response.data.jobs);
     } catch (error) {
-      console.error("Failed to fetch jobs:", error);
+      toast.error(errorMessage(error, "Failed to fetch jobs"));
     } finally {
       setLoading(false);
     }
-  };
+  }, [filterStatus]);
+
+  useEffect(() => {
+    fetchJobs();
+  }, [fetchJobs]);
 
   const handleDelete = async (id: string) => {
     if (!window.confirm("Are you sure you want to delete this job?")) return;
@@ -34,7 +34,7 @@ export default function JobsPage() {
       toast.success("Job deleted successfully");
       fetchJobs();
     } catch (error) {
-      toast.error("Failed to delete job");
+      toast.error(errorMessage(error, "Failed to delete job"));
     }
   };
 

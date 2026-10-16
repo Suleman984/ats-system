@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthStore } from "@/lib/store";
-import { jobAPI, applicationAPI, Application } from "@/lib/api";
+import { jobAPI, applicationAPI, Application, errorMessage } from "@/lib/api";
+import { toast } from "@/components/Toast";
 
-export default function EmbeddedDashboardPage() {
+function EmbeddedDashboard() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isAuthenticated, user } = useAuthStore();
@@ -21,39 +22,7 @@ export default function EmbeddedDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Get company_id from URL
   const urlCompanyId = searchParams.get("company_id");
-
-  useEffect(() => {
-    // Validate company_id is present in URL
-    if (!urlCompanyId) {
-      setError(
-        "Invalid embed code: Company ID is missing. Please use the embed code from your dashboard."
-      );
-      setLoading(false);
-      return;
-    }
-
-    // If not authenticated, redirect to login with company_id
-    if (!isAuthenticated) {
-      router.push(`/embed/login?company_id=${urlCompanyId}`);
-      return;
-    }
-
-    // Validate that logged-in user's company_id matches URL company_id
-    if (user?.company_id !== urlCompanyId) {
-      setError(
-        "Security Error: The embed code does not match your account. Please log out and use the correct embed code from your dashboard."
-      );
-      setLoading(false);
-      return;
-    }
-
-    // All validations passed, fetch dashboard data
-    if (isAuthenticated && user?.company_id === urlCompanyId) {
-      fetchDashboardData();
-    }
-  }, [isAuthenticated, user, urlCompanyId, router]);
 
   const fetchDashboardData = async () => {
     try {
@@ -73,11 +42,40 @@ export default function EmbeddedDashboardPage() {
       });
       setRecentApplications(applications.slice(0, 5));
     } catch (error) {
-      console.error("Failed to fetch dashboard data:", error);
+      toast.error(errorMessage(error, "Failed to fetch dashboard data"));
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    // Validate company_id is present in URL
+    if (!urlCompanyId) {
+      setError(
+        "Invalid embed code: Company ID is missing. Please use the embed code from your dashboard."
+      );
+      setLoading(false);
+      return;
+    }
+
+    if (!isAuthenticated) {
+      router.push(`/embed/login?company_id=${urlCompanyId}`);
+      return;
+    }
+
+    // Validate that logged-in user's company_id matches URL company_id
+    if (user?.company_id !== urlCompanyId) {
+      setError(
+        "Security Error: The embed code does not match your account. Please log out and use the correct embed code from your dashboard."
+      );
+      setLoading(false);
+      return;
+    }
+
+    if (isAuthenticated && user?.company_id === urlCompanyId) {
+      fetchDashboardData();
+    }
+  }, [isAuthenticated, user, urlCompanyId, router]);
 
   if (loading) {
     return (
@@ -239,5 +237,13 @@ function ActionCard({
       <h3 className="font-bold text-base mb-1">{title}</h3>
       <p className="text-gray-600 text-xs">{description}</p>
     </a>
+  );
+}
+
+export default function EmbeddedDashboardPage() {
+  return (
+    <Suspense>
+      <EmbeddedDashboard />
+    </Suspense>
   );
 }

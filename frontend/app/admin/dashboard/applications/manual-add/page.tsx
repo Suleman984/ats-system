@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { jobAPI, Job, uploadAPI } from "@/lib/api";
+import { jobAPI, candidateSearchAPI, uploadAPI, errorMessage, type Job } from "@/lib/api";
 import { toast } from "@/components/Toast";
 
 export default function ManualAddCandidatePage() {
@@ -27,19 +27,18 @@ export default function ManualAddCandidatePage() {
     resume_type: "url" as "url" | "file",
   });
 
-  useEffect(() => {
-    fetchJobs();
-  }, []);
-
   const fetchJobs = async () => {
     try {
       const response = await jobAPI.getAll();
       setJobs(response.data.jobs);
     } catch (error) {
-      console.error("Failed to fetch jobs:", error);
-      toast.error("Failed to load jobs");
+      toast.error(errorMessage(error, "Failed to load jobs"));
     }
   };
+
+  useEffect(() => {
+    fetchJobs();
+  }, []);
 
   const handleCVFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -71,9 +70,9 @@ export default function ManualAddCandidatePage() {
       setFormData({ ...formData, resume_url: response.data.file_url });
       setCvUploadMessage("✓ CV uploaded successfully!");
       setTimeout(() => setCvUploadMessage(""), 5000);
-    } catch (error: any) {
+    } catch (error) {
       setCvUploadMessage("");
-      toast.error(error.response?.data?.error || "Failed to upload CV");
+      toast.error(errorMessage(error, "Failed to upload CV"));
     } finally {
       setUploadingCV(false);
     }
@@ -94,29 +93,14 @@ export default function ManualAddCandidatePage() {
 
     setLoading(true);
     try {
-      const response = await fetch("/api/candidates/manual", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("token")}`,
-        },
-        body: JSON.stringify(formData),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to add candidate");
-      }
+      await candidateSearchAPI.addManual(formData);
 
       toast.success(
         "Candidate added successfully! CV will be analyzed automatically."
       );
-      setTimeout(() => router.push("/admin/dashboard/applications"), 1500);
-    } catch (error: any) {
-      toast.error(
-        error.message || "Failed to add candidate. Please try again."
-      );
+      router.push("/admin/dashboard/applications");
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to add candidate. Please try again."));
     } finally {
       setLoading(false);
     }
@@ -288,7 +272,7 @@ export default function ManualAddCandidatePage() {
                     name="resume_type"
                     value="url"
                     checked={formData.resume_type === "url"}
-                    onChange={(e) =>
+                    onChange={() =>
                       setFormData({
                         ...formData,
                         resume_type: "url" as const,
@@ -304,7 +288,7 @@ export default function ManualAddCandidatePage() {
                     name="resume_type"
                     value="file"
                     checked={formData.resume_type === "file"}
-                    onChange={(e) =>
+                    onChange={() =>
                       setFormData({
                         ...formData,
                         resume_type: "file" as const,

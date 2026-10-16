@@ -1,662 +1,293 @@
 package controllers
 
 import (
-	"ats-backend/config"
-	"ats-backend/models"
-	"ats-backend/services"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
-	"unicode/utf8"
+
+	"ats-backend/config"
+	"ats-backend/models"
+	"ats-backend/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
-// SubmitApplication handles job application submission
+// expectedResponseWindow is the response time promised to candidates after each status change.
+const expectedResponseWindow = 5 * 24 * time.Hour
+
+// candidateFields are the only fields an applicant may set.
+type candidateFields struct {
+	FullName          string `json:"full_name" binding:"required,max=255"`
+	Email             string `json:"email" binding:"required,email,max=255"`
+	Phone             string `json:"phone" binding:"omitempty,max=50"`
+	ResumeURL         string `json:"resume_url" binding:"required,url"`
+	CoverLetter       string `json:"cover_letter" binding:"max=10000"`
+	YearsOfExperience int    `json:"years_of_experience" binding:"min=0,max=60"`
+	CurrentPosition   string `json:"current_position" binding:"max=255"`
+	LinkedinURL       string `json:"linkedin_url" binding:"omitempty,url,max=255"`
+	PortfolioURL      string `json:"portfolio_url" binding:"omitempty,url,max=255"`
+	ReferralSource    string `json:"referral_source" binding:"max=255"`
+	ReferredByName    string `json:"referred_by_name" binding:"max=255"`
+	ReferredByEmail   string `json:"referred_by_email" binding:"omitempty,email,max=255"`
+	ReferredByPhone   string `json:"referred_by_phone" binding:"max=50"`
+}
+
+func (f *candidateFields) toApplication(job *models.Job) models.Application {
+	return models.Application{
+		JobID:             &job.ID,
+		CompanyID:         job.CompanyID,
+		FullName:          f.FullName,
+		Email:             strings.ToLower(f.Email),
+		Phone:             f.Phone,
+		ResumeURL:         f.ResumeURL,
+		CoverLetter:       f.CoverLetter,
+		YearsOfExperience: f.YearsOfExperience,
+		CurrentPosition:   f.CurrentPosition,
+		LinkedinURL:       f.LinkedinURL,
+		PortfolioURL:      f.PortfolioURL,
+		ReferralSource:    f.ReferralSource,
+		ReferredByName:    f.ReferredByName,
+		ReferredByEmail:   f.ReferredByEmail,
+		ReferredByPhone:   f.ReferredByPhone,
+		Status:            models.StatusPending,
+		AppliedAt:         time.Now(),
+	}
+}
+
+type submitApplicationRequest struct {
+	JobID uuid.UUID `json:"job_id" binding:"required"`
+	candidateFields
+}
+
 func SubmitApplication(c *gin.Context) {
-	var application models.Application
-	if err := c.ShouldBindJSON(&application); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	var req submitApplicationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		badRequest(c, err)
 		return
 	}
 
-	// Check if job exists and is open
 	var job models.Job
-	jobID := application.JobID
-	if jobID == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Job ID is required"})
-		return
-	}
-	if err := config.DB.First(&job, "id = ?", *jobID).Error; err != nil {
+	err := config.DB.First(&job, "id = ?", req.JobID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
 		return
 	}
-
-	// Check if job is closed
-	if job.Status != "open" {
+	if err != nil {
+		serverError(c, "Failed to load job")
+		return
+	}
+	if job.Closed(time.Now().UTC()) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "Applications closed",
-			"message": "This job posting is currently closed and not accepting applications.",
+			"message": "This job is no longer accepting applications.",
 		})
 		return
 	}
 
-	// Check if deadline has passed
-	if time.Now().After(job.Deadline.Time) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "Applications closed",
-			"message": "Unfortunately, the deadline for this position has passed. Better luck next time!",
-		})
+	app := req.toApplication(&job)
+	if err := config.DB.Create(&app).Error; err != nil {
+		serverError(c, "Failed to submit application")
 		return
 	}
 
-	// Set application timestamp
-	application.AppliedAt = time.Now()
-	application.Status = "pending"
-	// Set company_id from job (for tracking even if job is deleted later)
-	application.CompanyID = job.CompanyID
-
-	// Save to database
-	if err := config.DB.Create(&application).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to submit application"})
-		return
-	}
-
-	// Parse and store CV text for future searching (async)
+	go services.ProcessApplicationCV(app.ID, app.ResumeURL, &job)
 	go func() {
-		if application.ResumeURL != "" {
-			log.Printf("Parsing CV text for application %s (URL: %s)", application.ID.String(), application.ResumeURL)
-			cvText, err := services.ExtractTextFromURL(application.ResumeURL)
-			if err != nil {
-				log.Printf("ERROR: Failed to parse CV text for %s (Email: %s, URL: %s): %v", 
-					application.FullName, application.Email, application.ResumeURL, err)
-				return
-			}
-			
-			if len(cvText) < 50 {
-				log.Printf("WARNING: CV text too short for %s (%d characters). URL: %s", 
-					application.FullName, len(cvText), application.ResumeURL)
-				return
-			}
-			
-			// Validate UTF-8 before saving
-			if !utf8.ValidString(cvText) {
-				log.Printf("ERROR: Extracted CV text is not valid UTF-8 for %s. Skipping save.", 
-					application.FullName)
-				return
-			}
-			
-			// Update using the application ID (more reliable than using the model)
-			updateErr := config.DB.Model(&models.Application{}).
-				Where("id = ?", application.ID).
-				Update("parsed_cv_text", cvText).Error
-			
-			if updateErr != nil {
-				log.Printf("ERROR: Failed to save parsed CV text to database for %s: %v", 
-					application.FullName, updateErr)
-			} else {
-				log.Printf("SUCCESS: CV text parsed and stored for %s (%d characters)", 
-					application.FullName, len(cvText))
-			}
-		} else {
-			log.Printf("WARNING: No ResumeURL provided for application %s", application.ID.String())
-		}
-	}()
-
-	// Automatically analyze CV and calculate score (async)
-	// Note: We only calculate score, admin decides whether to shortlist
-	go func() {
-		log.Printf("Starting CV analysis for application %s (Job: %s)", application.ID.String(), job.Title)
-		
-		var criteria services.Criteria
-		
-		// Try to use job's shortlist criteria if available
-		if job.ShortlistCriteria != nil && *job.ShortlistCriteria != "" {
-			log.Printf("Using job's shortlist criteria for application %s", application.ID.String())
-			if err := json.Unmarshal([]byte(*job.ShortlistCriteria), &criteria); err != nil {
-				log.Printf("WARNING: Failed to parse job's shortlist criteria for application %s: %v. Using default criteria.", application.ID.String(), err)
-				// Fall through to use default criteria
-			} else {
-				criteria.JobDescription = job.Description
-				criteria.JobRequirements = job.Requirements
-			}
-		} else {
-			log.Printf("No shortlist criteria set for job '%s'. Using default criteria for basic analysis.", job.Title)
-			// Use default criteria: analyze based on job description and requirements
-			criteria = services.Criteria{
-				RequiredSkills:      []string{}, // Will extract from job description
-				MinExperience:       0,          // Will extract from job description
-				RequiredLanguages:   []string{},
-				MatchJobDescription: true,
-				JobDescription:      job.Description,
-				JobRequirements:     job.Requirements,
-			}
-		}
-		
-		// Analyze CV
-		log.Printf("Analyzing CV for %s (Email: %s)", application.FullName, application.Email)
-		analysisResult, err := services.MatchCVFromURL(application.ResumeURL, criteria, job.Title)
-		if err != nil {
-			log.Printf("ERROR: Failed to auto-analyze CV for %s (Email: %s, Application ID: %s): %v", 
-				application.FullName, application.Email, application.ID.String(), err)
-			log.Printf("CV URL: %s", application.ResumeURL)
-			return
-		}
-		
-		// Update application with score (but don't auto-shortlist)
-		application.Score = analysisResult.MatchScore
-		analysisJSON, _ := json.Marshal(analysisResult)
-		analysisJSONStr := string(analysisJSON)
-		application.AnalysisResult = &analysisJSONStr
-		
-		// Save updated application with score
-		if err := config.DB.Save(&application).Error; err != nil {
-			log.Printf("ERROR: Failed to save analysis result for application %s: %v", application.ID.String(), err)
-			return
-		}
-		
-		log.Printf("SUCCESS: CV analyzed for %s (Email: %s, Application ID: %s): Score=%d%% (Admin can review and shortlist manually)", 
-			application.FullName, application.Email, application.ID.String(), analysisResult.MatchScore)
-	}()
-
-	// Send confirmation email with application status link (async with error logging)
-	go func() {
-		log.Printf("Sending confirmation email to %s for job %s", application.Email, job.Title)
-		if err := services.SendConfirmationEmail(application.Email, application.FullName, job.Title, application.ID.String()); err != nil {
-			log.Printf("ERROR: Failed to send confirmation email to %s: %v", application.Email, err)
-		} else {
-			log.Printf("SUCCESS: Confirmation email sent to %s with application status link", application.Email)
+		if err := services.SendConfirmationEmail(app.Email, app.FullName, job.Title, app.ID.String()); err != nil {
+			log.Printf("confirmation email to application %s: %v", app.ID, err)
 		}
 	}()
 
 	c.JSON(http.StatusCreated, gin.H{
 		"message":     "Application submitted successfully!",
-		"application": application,
+		"application": gin.H{"id": app.ID, "status": app.Status, "applied_at": app.AppliedAt},
 	})
 }
 
-// GetApplications returns all applications for company's jobs
+// GetApplications lists applications for the company's existing jobs; orphaned ones live in Find Candidates.
 func GetApplications(c *gin.Context) {
-	companyIDVal, exists := c.Get("company_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
-		return
-	}
-	companyID, ok := companyIDVal.(string)
-	if !ok || companyID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
-		return
-	}
-	var applications []models.Application
+	query := config.DB.Preload("Job").
+		Omit("parsed_cv_text").
+		Where("company_id = ? AND job_id IS NOT NULL", companyID(c)).
+		Order("applied_at desc")
 
-	// Get all applications for this company's ACTIVE jobs only
-	// Exclude applications where job_id IS NULL (deleted jobs) - these should not show in Applications tab
-	// But they will still be available in Find Candidates search
-	// Using INNER JOIN is optimized - automatically excludes NULL job_id and uses indexes
-	query := config.DB.Table("applications").
-		Select("applications.*").
-		Joins("INNER JOIN jobs ON jobs.id = applications.job_id").
-		Where("jobs.company_id = ?", companyID).
-		Preload("Job")
-
-	// Filter by job_id if provided
 	if jobID := c.Query("job_id"); jobID != "" {
-		query = query.Where("applications.job_id = ?", jobID)
+		query = query.Where("job_id = ?", jobID)
 	}
-
-	// Filter by status if provided
 	if status := c.Query("status"); status != "" {
-		query = query.Where("applications.status = ?", status)
+		query = query.Where("status = ?", status)
+	}
+	if from, err := time.Parse("2006-01-02", c.Query("date_from")); err == nil {
+		query = query.Where("applied_at >= ?", from)
+	}
+	if to, err := time.Parse("2006-01-02", c.Query("date_to")); err == nil {
+		query = query.Where("applied_at < ?", to.AddDate(0, 0, 1))
 	}
 
-	// Filter by date range (applied_at date)
-	if dateFrom := c.Query("date_from"); dateFrom != "" {
-		// Parse date and filter by date (ignoring time)
-		if dateFromTime, err := time.Parse("2006-01-02", dateFrom); err == nil {
-			// Use PostgreSQL DATE() function to extract date part and compare
-			// This ensures timezone-independent date comparison
-			query = query.Where("DATE(applications.applied_at) >= ?", dateFromTime.Format("2006-01-02"))
-			log.Printf("Filtering applications from date: %s", dateFromTime.Format("2006-01-02"))
-		} else {
-			log.Printf("Invalid date_from format: %s, error: %v", dateFrom, err)
-		}
-	}
-	if dateTo := c.Query("date_to"); dateTo != "" {
-		// Parse date and filter by date (ignoring time)
-		if dateToTime, err := time.Parse("2006-01-02", dateTo); err == nil {
-			// Use PostgreSQL DATE() function to extract date part and compare
-			query = query.Where("DATE(applications.applied_at) <= ?", dateToTime.Format("2006-01-02"))
-			log.Printf("Filtering applications to date: %s", dateToTime.Format("2006-01-02"))
-		} else {
-			log.Printf("Invalid date_to format: %s, error: %v", dateTo, err)
-		}
-	}
-
+	var applications []models.Application
 	if err := query.Find(&applications).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch applications"})
+		serverError(c, "Failed to fetch applications")
 		return
 	}
-
 	c.JSON(http.StatusOK, gin.H{"applications": applications})
 }
 
-// ShortlistApplication marks an application as shortlisted
 func ShortlistApplication(c *gin.Context) {
-	applicationID := c.Param("id")
-	companyIDVal, exists := c.Get("company_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
-		return
-	}
-	companyID, ok := companyIDVal.(string)
-	if !ok || companyID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
-		return
-	}
-
-	var application models.Application
-	// Verify application belongs to company (even if job is deleted)
-	err := config.DB.Table("applications").
-		Select("applications.*").
-		Joins("LEFT JOIN jobs ON jobs.id = applications.job_id").
-		Where("applications.id = ? AND (applications.company_id = ? OR jobs.company_id = ?)", applicationID, companyID, companyID).
-		Preload("Job").
-		First(&application).Error
-
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Application not found"})
-		return
-	}
-
-	// Store old status for logging
-	oldStatus := application.Status
-
-	// Update status
-	now := time.Now()
-	application.Status = "shortlisted"
-	application.ReviewedAt = &now
-	application.LastStatusUpdate = &now
-	// Set expected response date (5 days from now)
-	expectedDate := now.AddDate(0, 0, 5)
-	application.ExpectedResponseDate = &expectedDate
-
-	if err := config.DB.Save(&application).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update application"})
-		return
-	}
-
-	// Log application shortlisting
-	companyUUID, _ := uuid.Parse(companyID)
-	adminIDVal, _ := c.Get("admin_id")
-	adminIDStr, _ := adminIDVal.(string)
-	adminUUID, _ := uuid.Parse(adminIDStr)
-	applicationUUID, _ := uuid.Parse(applicationID)
-	jobTitle := "Unknown Job (Job Deleted)"
-	if application.JobID != nil && application.Job.ID != uuid.Nil {
-		jobTitle = application.Job.Title
-	}
-
-	services.LogApplicationStatusChanged(companyUUID, adminUUID, applicationUUID, application.FullName, jobTitle, oldStatus, "shortlisted")
-
-	// Send shortlist email and SMS (async with error logging)
-	go func() {
-		log.Printf("Sending shortlist email to %s for application %s", application.Email, applicationID)
-		if err := services.SendShortlistEmail(application.Email, application.FullName, jobTitle); err != nil {
-			log.Printf("ERROR: Failed to send shortlist email to %s: %v", application.Email, err)
-		} else {
-			log.Printf("SUCCESS: Shortlist email sent to %s", application.Email)
-		}
-		
-		// Send SMS notification
-		if application.Phone != "" {
-			if err := services.SendStatusUpdateSMS(application.Phone, application.FullName, jobTitle, "shortlisted"); err != nil {
-				log.Printf("ERROR: Failed to send shortlist SMS to %s: %v", application.Phone, err)
-			} else {
-				log.Printf("SUCCESS: Shortlist SMS sent to %s", application.Phone)
-			}
-		}
-	}()
-
-	c.JSON(http.StatusOK, gin.H{
-		"message":     "Application shortlisted successfully",
-		"application": application,
-	})
+	updateDecision(c, models.StatusShortlisted, services.SendShortlistEmail)
 }
 
-// RejectApplication marks an application as rejected
 func RejectApplication(c *gin.Context) {
-	applicationID := c.Param("id")
-	companyIDVal, exists := c.Get("company_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+	updateDecision(c, models.StatusRejected, services.SendRejectionEmail)
+}
+
+func updateDecision(c *gin.Context, status string, notify func(to, name, jobTitle string) error) {
+	id, ok := uuidParam(c, "id")
+	if !ok {
 		return
 	}
-	companyID, ok := companyIDVal.(string)
-	if !ok || companyID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
+	app, ok := findCompanyApplication(c, id)
+	if !ok {
 		return
 	}
-
-	var application models.Application
-	// Verify application belongs to company (even if job is deleted)
-	err := config.DB.Table("applications").
-		Select("applications.*").
-		Joins("LEFT JOIN jobs ON jobs.id = applications.job_id").
-		Where("applications.id = ? AND (applications.company_id = ? OR jobs.company_id = ?)", applicationID, companyID, companyID).
-		Preload("Job").
-		First(&application).Error
-
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Application not found"})
-		return
-	}
-
-	// Store old status for logging
-	oldStatus := application.Status
 
 	now := time.Now()
-	application.Status = "rejected"
-	application.ReviewedAt = &now
-	application.LastStatusUpdate = &now
-
-	if err := config.DB.Save(&application).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update application"})
+	reviewer := adminID(c)
+	oldStatus := app.Status
+	app.Status = status
+	app.ReviewedAt = &now
+	app.ReviewedBy = &reviewer
+	app.LastStatusUpdate = &now
+	updates := map[string]any{
+		"status": status, "reviewed_at": now, "reviewed_by": reviewer, "last_status_update": now,
+	}
+	if status == models.StatusShortlisted {
+		app.ExpectedResponseDate = ptr(now.Add(expectedResponseWindow))
+		updates["expected_response_date"] = app.ExpectedResponseDate
+	}
+	if err := config.DB.Model(app).Updates(updates).Error; err != nil {
+		serverError(c, "Failed to update application")
 		return
 	}
 
-	// Log application rejection
-	companyUUID, _ := uuid.Parse(companyID)
-	adminIDVal, _ := c.Get("admin_id")
-	adminIDStr, _ := adminIDVal.(string)
-	adminUUID, _ := uuid.Parse(adminIDStr)
-	applicationUUID, _ := uuid.Parse(applicationID)
-	jobTitle := "Unknown Job (Job Deleted)"
-	if application.JobID != nil && application.Job.ID != uuid.Nil {
-		jobTitle = application.Job.Title
-	}
-
-	services.LogApplicationStatusChanged(companyUUID, adminUUID, applicationUUID, application.FullName, jobTitle, oldStatus, "rejected")
-
-	// Send rejection email and SMS (async with error logging)
+	jobTitle := app.JobTitle()
+	services.LogApplicationStatusChanged(app.CompanyID, reviewer, app.ID, app.FullName, jobTitle, oldStatus, status)
 	go func() {
-		log.Printf("Sending rejection email to %s", application.Email)
-		if err := services.SendRejectionEmail(application.Email, application.FullName, jobTitle); err != nil {
-			log.Printf("ERROR: Failed to send rejection email to %s: %v", application.Email, err)
-		} else {
-			log.Printf("SUCCESS: Rejection email sent to %s", application.Email)
+		if err := notify(app.Email, app.FullName, jobTitle); err != nil {
+			log.Printf("%s email for application %s: %v", status, app.ID, err)
 		}
-		
-		// Send SMS notification
-		if application.Phone != "" {
-			if err := services.SendStatusUpdateSMS(application.Phone, application.FullName, jobTitle, "rejected"); err != nil {
-				log.Printf("ERROR: Failed to send rejection SMS to %s: %v", application.Phone, err)
-			} else {
-				log.Printf("SUCCESS: Rejection SMS sent to %s", application.Phone)
-			}
+		if err := services.SendStatusUpdateSMS(app.Phone, app.FullName, jobTitle, status); err != nil {
+			log.Printf("%s SMS for application %s: %v", status, app.ID, err)
 		}
 	}()
 
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Application rejected",
-	})
+	c.JSON(http.StatusOK, gin.H{"message": "Application " + status, "application": app})
 }
 
-// DeleteApplication deletes a single application
 func DeleteApplication(c *gin.Context) {
-	applicationID := c.Param("id")
-	companyIDVal, exists := c.Get("company_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+	id, ok := uuidParam(c, "id")
+	if !ok {
 		return
 	}
-	companyID, ok := companyIDVal.(string)
-	if !ok || companyID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
+	app, ok := findCompanyApplication(c, id)
+	if !ok {
 		return
 	}
-
-	var application models.Application
-	// Verify application belongs to company (even if job is deleted)
-	err := config.DB.Table("applications").
-		Select("applications.*").
-		Joins("LEFT JOIN jobs ON jobs.id = applications.job_id").
-		Where("applications.id = ? AND (jobs.company_id = ? OR applications.job_id IS NULL)", applicationID, companyID).
-		Preload("Job").
-		First(&application).Error
-
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Application not found"})
+	if err := config.DB.Delete(app).Error; err != nil {
+		serverError(c, "Failed to delete application")
 		return
 	}
 
-	// Store application details for logging before deletion
-	applicantName := application.FullName
-	jobTitle := "Unknown Job (Job Deleted)"
-	if application.JobID != nil && application.Job.ID != uuid.Nil {
-		jobTitle = application.Job.Title
-	}
-	applicationUUID, _ := uuid.Parse(applicationID)
-	companyUUID, _ := uuid.Parse(companyID)
-	adminIDVal, _ := c.Get("admin_id")
-	adminIDStr, _ := adminIDVal.(string)
-	adminUUID, _ := uuid.Parse(adminIDStr)
-
-	// Delete the application
-	if err := config.DB.Delete(&application).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete application"})
-		return
-	}
-
-	// Log application deletion
-	services.LogActivity(
-		&companyUUID,
-		&adminUUID,
-		"application_deleted",
-		"application",
-		&applicationUUID,
-		"Application deleted: "+applicantName+" for job: "+jobTitle,
-		map[string]interface{}{
-			"applicant_name": applicantName,
-			"applicant_email": application.Email,
-			"job_title": jobTitle,
-			"status": application.Status,
-		},
-	)
+	company, admin, jobTitle := app.CompanyID, adminID(c), app.JobTitle()
+	services.LogActivity(&company, &admin, "application_deleted", "application", &app.ID,
+		"Application deleted: "+app.FullName+" for job: "+jobTitle,
+		map[string]any{"applicant_name": app.FullName, "applicant_email": app.Email, "job_title": jobTitle, "status": app.Status})
 
 	c.JSON(http.StatusOK, gin.H{"message": "Application deleted successfully"})
 }
 
-// BulkDeleteApplications deletes multiple applications by status
 func BulkDeleteApplications(c *gin.Context) {
-	companyIDVal, exists := c.Get("company_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
-		return
-	}
-	companyID, ok := companyIDVal.(string)
-	if !ok || companyID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
-		return
-	}
-
 	var req struct {
-		Status string `json:"status" binding:"required"` // pending, shortlisted, rejected
+		Status string `json:"status" binding:"required,oneof=pending cv_viewed shortlisted rejected"`
 	}
-
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		badRequest(c, err)
 		return
 	}
 
-	// Validate status
-	validStatuses := []string{"pending", "shortlisted", "rejected"}
-	isValid := false
-	for _, s := range validStatuses {
-		if req.Status == s {
-			isValid = true
-			break
-		}
-	}
-	if !isValid {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid status. Must be: pending, shortlisted, or rejected"})
-		return
-	}
-
-	// Get applications to delete
-	var applications []models.Application
-	err := config.DB.Table("applications").
-		Select("applications.*").
-		Joins("LEFT JOIN jobs ON jobs.id = applications.job_id").
-		Where("applications.status = ? AND (applications.company_id = ? OR jobs.company_id = ?)", req.Status, companyID, companyID).
-		Preload("Job").
-		Find(&applications).Error
-
+	company, admin := companyID(c), adminID(c)
+	var deleted []models.Application
+	err := config.DB.Clauses(clause.Returning{Columns: []clause.Column{{Name: "id"}, {Name: "full_name"}, {Name: "email"}}}).
+		Where("company_id = ? AND status = ?", company, req.Status).
+		Delete(&deleted).Error
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch applications"})
+		serverError(c, "Failed to delete applications")
 		return
 	}
 
-	if len(applications) == 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"message": "No applications found with the specified status",
-			"deleted_count": 0,
-		})
-		return
-	}
-
-	// Get admin ID for logging
-	adminIDVal, _ := c.Get("admin_id")
-	adminIDStr, _ := adminIDVal.(string)
-	adminUUID, _ := uuid.Parse(adminIDStr)
-	companyUUID, _ := uuid.Parse(companyID)
-
-	// Delete applications
-	deletedCount := 0
-	for _, app := range applications {
-		if err := config.DB.Delete(&app).Error; err == nil {
-			deletedCount++
-			// Log each deletion
-			appUUID, _ := uuid.Parse(app.ID.String())
-			jobTitle := "Unknown Job (Job Deleted)"
-			if app.JobID != nil && app.Job.ID != uuid.Nil {
-				jobTitle = app.Job.Title
-			}
-			services.LogActivity(
-				&companyUUID,
-				&adminUUID,
-				"application_deleted",
-				"application",
-				&appUUID,
-				"Bulk deleted application: "+app.FullName+" for job: "+jobTitle,
-				map[string]interface{}{
-					"applicant_name": app.FullName,
-					"applicant_email": app.Email,
-					"job_title": jobTitle,
-					"status": app.Status,
-					"bulk_delete": true,
-				},
-			)
+	if len(deleted) > 0 {
+		names := make([]string, len(deleted))
+		for i, app := range deleted {
+			names[i] = app.FullName
 		}
+		services.LogActivity(&company, &admin, "applications_bulk_deleted", "application", nil,
+			fmt.Sprintf("Bulk deleted %d %s application(s)", len(deleted), req.Status),
+			map[string]any{"status": req.Status, "count": len(deleted), "applicants": names})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": fmt.Sprintf("Deleted %d application(s) with status '%s'", deletedCount, req.Status),
-		"deleted_count": deletedCount,
-		"total_found": len(applications),
+		"message":       fmt.Sprintf("Deleted %d application(s) with status '%s'", len(deleted), req.Status),
+		"deleted_count": len(deleted),
+		"total_found":   len(deleted),
 	})
 }
 
-// TrackCVView tracks when a recruiter views a candidate's CV
-// Updates status to "cv_viewed" if currently "pending"
+// TrackCVView records the first CV view and moves pending applications to cv_viewed.
 func TrackCVView(c *gin.Context) {
-	applicationID := c.Param("id")
-	companyIDVal, exists := c.Get("company_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+	id, ok := uuidParam(c, "id")
+	if !ok {
 		return
 	}
-	companyID, ok := companyIDVal.(string)
-	if !ok || companyID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid company ID"})
+	app, ok := findCompanyApplication(c, id)
+	if !ok {
 		return
 	}
-
-	var application models.Application
-	// Verify application belongs to company (even if job is deleted)
-	err := config.DB.Table("applications").
-		Select("applications.*").
-		Joins("LEFT JOIN jobs ON jobs.id = applications.job_id").
-		Where("applications.id = ? AND (applications.company_id = ? OR jobs.company_id = ?)", applicationID, companyID, companyID).
-		Preload("Job").
-		First(&application).Error
-
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Application not found"})
-		return
-	}
-
-	// Get admin ID
-	adminIDVal, _ := c.Get("admin_id")
-	adminIDStr, _ := adminIDVal.(string)
-	adminUUID, _ := uuid.Parse(adminIDStr)
 
 	now := time.Now()
-	oldStatus := application.Status
-	statusChanged := false
-
-	// If CV hasn't been viewed yet, mark it as viewed
-	if application.CVViewedAt == nil {
-		application.CVViewedAt = &now
-		application.CVViewedBy = &adminUUID
-		statusChanged = true
+	viewer := adminID(c)
+	updates := map[string]any{}
+	if app.CVViewedAt == nil {
+		app.CVViewedAt, app.CVViewedBy = &now, &viewer
+		updates["cv_viewed_at"], updates["cv_viewed_by"] = now, viewer
+	}
+	oldStatus := app.Status
+	if app.Status == models.StatusPending {
+		app.Status = models.StatusCVViewed
+		app.LastStatusUpdate = &now
+		app.ExpectedResponseDate = ptr(now.Add(expectedResponseWindow))
+		updates["status"], updates["last_status_update"], updates["expected_response_date"] = app.Status, now, app.ExpectedResponseDate
 	}
 
-	// If status is "pending", update to "cv_viewed"
-	if application.Status == "pending" {
-		application.Status = "cv_viewed"
-		application.LastStatusUpdate = &now
-		// Set expected response date (5 days from now)
-		expectedDate := now.AddDate(0, 0, 5)
-		application.ExpectedResponseDate = &expectedDate
-		statusChanged = true
-	}
-
-	if statusChanged {
-		if err := config.DB.Save(&application).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update application"})
+	if len(updates) > 0 {
+		if err := config.DB.Model(app).Updates(updates).Error; err != nil {
+			serverError(c, "Failed to update application")
 			return
 		}
-
-		// Log CV view
-		companyUUID, _ := uuid.Parse(companyID)
-		applicationUUID, _ := uuid.Parse(applicationID)
-		jobTitle := "Unknown Job (Job Deleted)"
-		if application.JobID != nil && application.Job.ID != uuid.Nil {
-			jobTitle = application.Job.Title
-		}
-
-		if oldStatus != application.Status {
-			services.LogApplicationStatusChanged(companyUUID, adminUUID, applicationUUID, application.FullName, jobTitle, oldStatus, application.Status)
-		}
-
-		// Send SMS notification if status changed (async)
-		if application.Status == "cv_viewed" && application.Phone != "" {
-			go func() {
-				if err := services.SendStatusUpdateSMS(application.Phone, application.FullName, jobTitle, "cv_viewed"); err != nil {
-					log.Printf("ERROR: Failed to send CV viewed SMS to %s: %v", application.Phone, err)
-				} else {
-					log.Printf("SUCCESS: CV viewed SMS sent to %s", application.Phone)
-				}
-			}()
-		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"message":     "CV view tracked",
-		"application": application,
-	})
-}
+	if oldStatus != app.Status {
+		jobTitle := app.JobTitle()
+		services.LogApplicationStatusChanged(app.CompanyID, viewer, app.ID, app.FullName, jobTitle, oldStatus, app.Status)
+		go func() {
+			if err := services.SendStatusUpdateSMS(app.Phone, app.FullName, jobTitle, app.Status); err != nil {
+				log.Printf("cv_viewed SMS for application %s: %v", app.ID, err)
+			}
+		}()
+	}
 
+	c.JSON(http.StatusOK, gin.H{"message": "CV view tracked", "application": app})
+}

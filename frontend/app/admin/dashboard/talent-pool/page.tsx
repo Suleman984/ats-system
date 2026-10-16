@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { crmAPI, Application } from "@/lib/api";
+import { crmAPI, Application, errorMessage } from "@/lib/api";
 import { toast } from "@/components/Toast";
 import Link from "next/link";
 
@@ -9,22 +9,21 @@ export default function TalentPoolPage() {
   const [applications, setApplications] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadTalentPool();
-  }, []);
-
   const loadTalentPool = async () => {
     setLoading(true);
     try {
       const response = await crmAPI.getTalentPool();
       setApplications(response.data.applications);
-    } catch (error: any) {
-      console.error("Failed to load talent pool:", error);
-      toast.error(error.response?.data?.error || "Failed to load talent pool");
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to load talent pool"));
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    loadTalentPool();
+  }, []);
 
   const handleRemove = async (id: string, name: string) => {
     if (!window.confirm(`Remove ${name} from talent pool?`)) return;
@@ -32,9 +31,9 @@ export default function TalentPoolPage() {
       await crmAPI.removeFromTalentPool(id);
       toast.success("Removed from talent pool");
       loadTalentPool();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(
-        error.response?.data?.error || "Failed to remove from talent pool"
+        errorMessage(error, "Failed to remove from talent pool")
       );
     }
   };

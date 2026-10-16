@@ -1,17 +1,21 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   applicationAPI,
   jobAPI,
   aiShortlistAPI,
   crmAPI,
-  Application,
-  Job,
-  CandidateNote,
-  RelationshipTimelineItem,
+  errorMessage,
+  type Application,
+  type Job,
+  type CandidateNote,
+  type RelationshipTimelineItem,
 } from "@/lib/api";
 import { toast } from "@/components/Toast";
+import NotesModal from "@/components/applications/NotesModal";
+import TimelineModal from "@/components/applications/TimelineModal";
+import ReferralModal from "@/components/applications/ReferralModal";
 
 export default function ApplicationsPage() {
   const [applications, setApplications] = useState<Application[]>([]);
@@ -34,62 +38,43 @@ export default function ApplicationsPage() {
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [showTimelineModal, setShowTimelineModal] = useState(false);
   const [showReferralModal, setShowReferralModal] = useState(false);
-  const [newNote, setNewNote] = useState("");
-  const [isPrivateNote, setIsPrivateNote] = useState(false);
 
-  const fetchData = useCallback(
-    async (skipFilters = false) => {
-      try {
-        const params: {
-          job_id?: string;
-          status?: string;
-          date_from?: string;
-          date_to?: string;
-        } = {};
+  const fetchData = useCallback(async () => {
+    const params = Object.fromEntries(
+      Object.entries({
+        job_id: selectedJob,
+        status: selectedStatus,
+        date_from: dateFrom,
+        date_to: dateTo,
+      }).filter(([, value]) => value)
+    );
+    try {
+      const { data } = await applicationAPI.getAll(params);
+      setApplications(data.applications);
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to fetch applications"));
+    } finally {
+      setLoading(false);
+      setIsFiltering(false);
+    }
+  }, [selectedJob, selectedStatus, dateFrom, dateTo]);
 
-        if (!skipFilters) {
-          if (selectedJob) params.job_id = selectedJob;
-          if (selectedStatus) params.status = selectedStatus;
-          if (dateFrom) params.date_from = dateFrom;
-          if (dateTo) params.date_to = dateTo;
-        }
-
-        console.log("Fetching applications with params:", params);
-
-        const [appsRes, jobsRes] = await Promise.all([
-          applicationAPI.getAll(params),
-          jobAPI.getAll(),
-        ]);
-        setApplications(appsRes.data.applications);
-        setJobs(jobsRes.data.jobs);
-        console.log("Fetched applications:", appsRes.data.applications.length);
-      } catch (error) {
-        console.error("Failed to fetch data:", error);
-      } finally {
-        setLoading(false);
-        setIsFiltering(false);
-      }
-    },
-    [selectedJob, selectedStatus, dateFrom, dateTo]
-  );
-
-  // Initial load
   useEffect(() => {
-    fetchData(true);
+    jobAPI
+      .getAll()
+      .then(({ data }) => setJobs(data.jobs))
+      .catch((error) => toast.error(errorMessage(error, "Failed to fetch jobs")));
   }, []);
 
-  // Filter changes (debounced to avoid too many requests)
+  // Filter changes refetch after a 300ms debounce; the first load runs immediately.
+  const isFirstLoad = useRef(true);
   useEffect(() => {
-    // Skip if still loading initial data
-    if (loading) return;
-
-    setIsFiltering(true);
-    const timeoutId = setTimeout(() => {
-      fetchData(false);
-    }, 300); // Debounce for 300ms
-
+    const delay = isFirstLoad.current ? 0 : 300;
+    if (!isFirstLoad.current) setIsFiltering(true);
+    isFirstLoad.current = false;
+    const timeoutId = setTimeout(fetchData, delay);
     return () => clearTimeout(timeoutId);
-  }, [selectedJob, selectedStatus, dateFrom, dateTo, loading, fetchData]);
+  }, [fetchData]);
 
   const handleShortlist = async (id: string) => {
     if (!window.confirm("Shortlist this candidate?")) return;
@@ -98,7 +83,7 @@ export default function ApplicationsPage() {
       toast.success("Candidate shortlisted! Email sent.");
       fetchData();
     } catch (error) {
-      toast.error("Failed to shortlist candidate");
+      toast.error(errorMessage(error, "Failed to shortlist candidate"));
     }
   };
 
@@ -109,7 +94,7 @@ export default function ApplicationsPage() {
       toast.success("Candidate rejected. Email sent.");
       fetchData();
     } catch (error) {
-      toast.error("Failed to reject candidate");
+      toast.error(errorMessage(error, "Failed to reject candidate"));
     }
   };
 
@@ -124,9 +109,9 @@ export default function ApplicationsPage() {
       await applicationAPI.delete(id);
       toast.success("Application deleted successfully");
       fetchData();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(
-        error.response?.data?.error || "Failed to delete application"
+        errorMessage(error, "Failed to delete application")
       );
     }
   };
@@ -153,27 +138,25 @@ export default function ApplicationsPage() {
           `Deleted ${response.data.deleted_count} ${label} application(s)`
       );
       fetchData();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(
-        error.response?.data?.error || "Failed to delete applications"
+        errorMessage(error, "Failed to delete applications")
       );
     }
   };
 
   const handleAnalyzeCV = async (app: Application) => {
-    // Add to analyzing set
     setAnalyzingApps((prev) => new Set(prev).add(app.id));
     setOpenDropdown(null);
 
     try {
-      // Find the job for this application to get job details
       const job = jobs.find((j) => j.id === app.job_id);
       if (!job) {
         toast.error("Job not found for this application");
         return;
       }
 
-      // Call AI analysis endpoint with empty criteria (will use job description/requirements)
+      // Empty criteria makes the API fall back to the job's saved criteria.
       const response = await aiShortlistAPI.analyze({
         application_id: app.id,
         required_skills: [],
@@ -182,7 +165,6 @@ export default function ApplicationsPage() {
         match_job_description: true,
       });
 
-      // Update the application in the local state
       setApplications((prevApps) =>
         prevApps.map((a) =>
           a.id === app.id
@@ -198,15 +180,9 @@ export default function ApplicationsPage() {
       toast.success(
         `CV analyzed successfully! Match Score: ${response.data.analysis.match_score}%`
       );
-    } catch (error: any) {
-      console.error("Failed to analyze CV:", error);
-      toast.error(
-        error.response?.data?.error ||
-          error.response?.data?.details ||
-          "Failed to analyze CV. Please try again."
-      );
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to analyze CV. Please try again."));
     } finally {
-      // Remove from analyzing set
       setAnalyzingApps((prev) => {
         const newSet = new Set(prev);
         newSet.delete(app.id);
@@ -234,7 +210,7 @@ export default function ApplicationsPage() {
         [applicationId]: response.data.notes,
       }));
     } catch (error) {
-      console.error("Failed to load notes:", error);
+      toast.error(errorMessage(error, "Failed to load notes"));
     }
   };
 
@@ -246,7 +222,7 @@ export default function ApplicationsPage() {
         [applicationId]: response.data.timeline,
       }));
     } catch (error) {
-      console.error("Failed to load timeline:", error);
+      toast.error(errorMessage(error, "Failed to load timeline"));
     }
   };
 
@@ -471,10 +447,7 @@ export default function ApplicationsPage() {
                                   }\n\nReason: ${
                                     analysis.match_reason || "N/A"
                                   }`;
-                                  // Show in a modal or use a better UI component
-                                  // For now, using a more user-friendly approach
-                                  toast.info(analysisText.split("\n\n")[0]); // Show first part as toast
-                                  // Could also open a modal here for full details
+                                  toast.info(analysisText.split("\n\n")[0]);
                                 }}
                                 className="text-xs text-blue-600 cursor-pointer hover:underline"
                                 title="View AI Analysis Details"
@@ -524,27 +497,22 @@ export default function ApplicationsPage() {
                             <>
                               {/* Backdrop to close on outside click */}
                               <div
-                                className="fixed inset-0 z-[100]"
+                                className="fixed inset-0 z-100"
                                 onClick={() => setOpenDropdown(null)}
                               ></div>
                               {/* Dropdown menu */}
-                              <div className="absolute right-0 top-full mt-1 w-36 bg-white rounded-md shadow-2xl z-[200] border border-gray-300 py-1.5">
+                              <div className="absolute right-0 top-full mt-1 w-36 bg-white rounded-md shadow-2xl z-200 border border-gray-300 py-1.5">
                                 <a
                                   href={app.resume_url}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   onClick={async () => {
                                     setOpenDropdown(null);
-                                    // Track CV view
                                     try {
                                       await applicationAPI.trackCVView(app.id);
-                                      // Refresh applications to update status
                                       fetchData();
                                     } catch (error) {
-                                      console.error(
-                                        "Failed to track CV view:",
-                                        error
-                                      );
+                                      toast.error(errorMessage(error, "Failed to track CV view"));
                                     }
                                   }}
                                   className="block px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 transition-colors"
@@ -668,7 +636,7 @@ export default function ApplicationsPage() {
                                           "Removed from talent pool"
                                         );
                                         fetchData();
-                                      } catch (error) {
+                                      } catch {
                                         toast.error(
                                           "Failed to remove from talent pool"
                                         );
@@ -687,7 +655,7 @@ export default function ApplicationsPage() {
                                         await crmAPI.addToTalentPool(app.id);
                                         toast.success("Added to talent pool");
                                         fetchData();
-                                      } catch (error) {
+                                      } catch {
                                         toast.error(
                                           "Failed to add to talent pool"
                                         );
@@ -732,8 +700,6 @@ export default function ApplicationsPage() {
           onClose={() => {
             setShowNotesModal(false);
             setSelectedAppForDetails(null);
-            setNewNote("");
-            setIsPrivateNote(false);
           }}
           onRefresh={async () => {
             if (selectedAppForDetails) {
@@ -746,7 +712,6 @@ export default function ApplicationsPage() {
       {/* Timeline Modal */}
       {showTimelineModal && selectedAppForDetails && (
         <TimelineModal
-          applicationId={selectedAppForDetails}
           timeline={appTimeline[selectedAppForDetails] || []}
           onClose={() => {
             setShowTimelineModal(false);
@@ -770,318 +735,6 @@ export default function ApplicationsPage() {
           }}
         />
       )}
-    </div>
-  );
-}
-
-// Notes Modal Component
-function NotesModal({
-  applicationId,
-  notes,
-  onClose,
-  onRefresh,
-}: {
-  applicationId: string;
-  notes: CandidateNote[];
-  onClose: () => void;
-  onRefresh: () => void;
-}) {
-  const [newNote, setNewNote] = useState("");
-  const [isPrivate, setIsPrivate] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  const handleAddNote = async () => {
-    if (!newNote.trim()) {
-      toast.error("Please enter a note");
-      return;
-    }
-    setLoading(true);
-    try {
-      await crmAPI.addNote(applicationId, newNote.trim(), isPrivate);
-      toast.success("Note added successfully");
-      setNewNote("");
-      setIsPrivate(false);
-      onRefresh();
-    } catch (error: any) {
-      toast.error(error.response?.data?.error || "Failed to add note");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
-        <div className="p-6 border-b">
-          <div className="flex justify-between items-center">
-            <h2 className="text-2xl font-bold">Candidate Notes</h2>
-            <button
-              onClick={onClose}
-              className="text-gray-500 hover:text-gray-700 text-2xl"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-        <div className="flex-1 overflow-y-auto p-6">
-          <div className="space-y-4 mb-6">
-            {notes.length === 0 ? (
-              <p className="text-gray-500 text-center py-8">No notes yet</p>
-            ) : (
-              notes.map((note) => (
-                <div key={note.id} className="border rounded-lg p-4 bg-gray-50">
-                  <div className="flex justify-between items-start mb-2">
-                    <div>
-                      <p className="font-semibold text-sm">
-                        {note.admin?.name || "Unknown"}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {new Date(note.created_at).toLocaleString()}
-                        {note.is_private && (
-                          <span className="ml-2 text-blue-600">🔒 Private</span>
-                        )}
-                      </p>
-                    </div>
-                  </div>
-                  <p className="text-gray-800 whitespace-pre-wrap">
-                    {note.note}
-                  </p>
-                </div>
-              ))
-            )}
-          </div>
-
-          <div className="border-t pt-4">
-            <h3 className="font-semibold mb-3">Add New Note</h3>
-            <textarea
-              className="w-full px-4 py-2 border rounded-lg resize-none mb-3"
-              placeholder="Enter your note here..."
-              rows={4}
-              value={newNote}
-              onChange={(e) => setNewNote(e.target.value)}
-            />
-            <div className="flex items-center justify-between">
-              <label className="flex items-center">
-                <input
-                  type="checkbox"
-                  checked={isPrivate}
-                  onChange={(e) => setIsPrivate(e.target.checked)}
-                  className="mr-2"
-                />
-                <span className="text-sm text-gray-600">
-                  Private note (only visible to you)
-                </span>
-              </label>
-              <button
-                onClick={handleAddNote}
-                disabled={loading || !newNote.trim()}
-                className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 disabled:bg-blue-300"
-              >
-                {loading ? "Adding..." : "Add Note"}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Timeline Modal Component
-function TimelineModal({
-  applicationId,
-  timeline,
-  onClose,
-}: {
-  applicationId: string;
-  timeline: RelationshipTimelineItem[];
-  onClose: () => void;
-}) {
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col">
-        <div className="p-6 border-b">
-          <div className="flex justify-between items-center">
-            <h2 className="text-2xl font-bold">Relationship Timeline</h2>
-            <button
-              onClick={onClose}
-              className="text-gray-500 hover:text-gray-700 text-2xl"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-        <div className="flex-1 overflow-y-auto p-6">
-          {timeline.length === 0 ? (
-            <p className="text-gray-500 text-center py-8">
-              No timeline events yet
-            </p>
-          ) : (
-            <div className="space-y-4">
-              {timeline.map((item, index) => (
-                <div key={index} className="flex items-start gap-4">
-                  <div className="text-2xl flex-shrink-0">{item.icon}</div>
-                  <div className="flex-1 border-l-2 border-gray-200 pl-4 pb-4">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <p className="font-semibold">{item.title}</p>
-                        <p className="text-sm text-gray-600 mt-1">
-                          {item.description}
-                        </p>
-                        {item.author && (
-                          <p className="text-xs text-gray-500 mt-1">
-                            By: {item.author}
-                          </p>
-                        )}
-                        {item.admin && (
-                          <p className="text-xs text-gray-500 mt-1">
-                            By: {item.admin}
-                          </p>
-                        )}
-                      </div>
-                      <p className="text-xs text-gray-500">
-                        {new Date(item.timestamp).toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Referral Modal Component
-function ReferralModal({
-  application,
-  onClose,
-  onSave,
-}: {
-  application: Application | undefined;
-  onClose: () => void;
-  onSave: () => void;
-}) {
-  const [referralSource, setReferralSource] = useState(
-    application?.referral_source || ""
-  );
-  const [referredByName, setReferredByName] = useState(
-    application?.referred_by_name || ""
-  );
-  const [referredByEmail, setReferredByEmail] = useState(
-    application?.referred_by_email || ""
-  );
-  const [referredByPhone, setReferredByPhone] = useState(
-    application?.referred_by_phone || ""
-  );
-  const [loading, setLoading] = useState(false);
-
-  const handleSave = async () => {
-    if (!application) return;
-    setLoading(true);
-    try {
-      await crmAPI.updateReferral(
-        application.id,
-        referralSource,
-        referredByName,
-        referredByEmail,
-        referredByPhone
-      );
-      toast.success("Referral information updated");
-      onSave();
-    } catch (error: any) {
-      toast.error(
-        error.response?.data?.error || "Failed to update referral info"
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (!application) return null;
-
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-        <div className="p-6 border-b">
-          <div className="flex justify-between items-center">
-            <h2 className="text-2xl font-bold">Referral Information</h2>
-            <button
-              onClick={onClose}
-              className="text-gray-500 hover:text-gray-700 text-2xl"
-            >
-              ×
-            </button>
-          </div>
-        </div>
-        <div className="p-6 space-y-4">
-          <div>
-            <label className="block text-sm font-medium mb-1">
-              Referral Source
-            </label>
-            <input
-              type="text"
-              className="w-full px-4 py-2 border rounded-lg"
-              placeholder="e.g., LinkedIn, Employee Referral, Job Board"
-              value={referralSource}
-              onChange={(e) => setReferralSource(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">
-              Referred By (Name)
-            </label>
-            <input
-              type="text"
-              className="w-full px-4 py-2 border rounded-lg"
-              placeholder="Name of referrer"
-              value={referredByName}
-              onChange={(e) => setReferredByName(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">
-              Referred By (Email)
-            </label>
-            <input
-              type="email"
-              className="w-full px-4 py-2 border rounded-lg"
-              placeholder="email@example.com"
-              value={referredByEmail}
-              onChange={(e) => setReferredByEmail(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">
-              Referred By (Phone)
-            </label>
-            <input
-              type="tel"
-              className="w-full px-4 py-2 border rounded-lg"
-              placeholder="+1234567890"
-              value={referredByPhone}
-              onChange={(e) => setReferredByPhone(e.target.value)}
-            />
-          </div>
-          <div className="flex gap-3 pt-4">
-            <button
-              onClick={onClose}
-              className="flex-1 px-4 py-2 border rounded-lg hover:bg-gray-50"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={loading}
-              className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-blue-300"
-            >
-              {loading ? "Saving..." : "Save"}
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

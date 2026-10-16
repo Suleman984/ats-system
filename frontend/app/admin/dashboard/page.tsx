@@ -3,12 +3,13 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/store";
-import { jobAPI, applicationAPI, Job, Application } from "@/lib/api";
+import { jobAPI, applicationAPI, errorMessage, type Application } from "@/lib/api";
+import { toast } from "@/components/Toast";
 import Link from "next/link";
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { isAuthenticated, user } = useAuthStore();
+  const { isAuthenticated } = useAuthStore();
   const [stats, setStats] = useState({
     totalJobs: 0,
     openJobs: 0,
@@ -19,16 +20,6 @@ export default function DashboardPage() {
     []
   );
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (!isAuthenticated) {
-      router.push("/admin/login");
-      return;
-    }
-    if (isAuthenticated) {
-      fetchDashboardData();
-    }
-  }, [isAuthenticated, router]);
 
   const fetchDashboardData = async () => {
     try {
@@ -48,11 +39,21 @@ export default function DashboardPage() {
       });
       setRecentApplications(applications.slice(0, 5));
     } catch (error) {
-      console.error("Failed to fetch dashboard data:", error);
+      toast.error(errorMessage(error, "Failed to fetch dashboard data"));
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      router.push("/admin/login");
+      return;
+    }
+    if (isAuthenticated) {
+      fetchDashboardData();
+    }
+  }, [isAuthenticated, router]);
 
   if (loading) {
     return (

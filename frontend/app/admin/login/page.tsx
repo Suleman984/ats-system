@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { authAPI } from "@/lib/api";
+import { authAPI, errorMessage } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
 
 export default function LoginPage() {
@@ -36,8 +36,8 @@ export default function LoginPage() {
       const response = await authAPI.login(formData);
       login(response.data.admin, response.data.token);
       router.push("/admin/dashboard");
-    } catch (err: any) {
-      setError(err.response?.data?.error || "Login failed");
+    } catch (err) {
+      setError(errorMessage(err, "Login failed"));
     } finally {
       setLoading(false);
     }

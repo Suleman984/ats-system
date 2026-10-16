@@ -1,4 +1,4 @@
-import axios from "axios";
+import axios, { isAxiosError } from "axios";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
@@ -10,19 +10,29 @@ const api = axios.create({
   },
 });
 
-// Add token to requests if available
+// Super-admin and company-admin tokens are scoped to their own routes.
 api.interceptors.request.use((config) => {
   if (typeof window !== "undefined") {
-    // Check for super admin token first, then regular admin token
-    const superAdminToken = localStorage.getItem("super_admin_token");
-    const adminToken = localStorage.getItem("token");
-    const token = superAdminToken || adminToken;
+    const isSuperAdminRoute = config.url?.startsWith("/super-admin");
+    const token = localStorage.getItem(isSuperAdminRoute ? "super_admin_token" : "token");
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
   }
   return config;
 });
+
+// Public endpoints use a separate instance so admin tokens are never attached.
+const publicApi = axios.create({
+  baseURL: API_BASE_URL,
+});
+
+export function errorMessage(error: unknown, fallback: string): string {
+  if (isAxiosError<{ error?: string; message?: string }>(error)) {
+    return error.response?.data?.message || error.response?.data?.error || fallback;
+  }
+  return fallback;
+}
 
 // Types
 export interface RegisterRequest {
@@ -77,14 +87,15 @@ export interface Job {
   deadline: string;
   status: string;
   auto_shortlist: boolean;
+  shortlist_criteria?: string | Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
 
 export interface Application {
   id: string;
-  job_id?: string; // Optional - may be null if job was deleted
-  company_id?: string; // Added for tracking
+  job_id?: string;
+  company_id?: string;
   full_name: string;
   email: string;
   phone?: string;
@@ -95,11 +106,11 @@ export interface Application {
   linkedin_url?: string;
   portfolio_url?: string;
   status: string;
-  score: number; // AI match score 0-100
-  analysis_result?: CVAnalysisResult | string; // AI analysis details (can be string JSON or parsed object)
+  score: number;
+  analysis_result?: CVAnalysisResult | string;
   applied_at: string;
   reviewed_at?: string;
-  // CRM fields
+  cv_viewed_at?: string;
   referral_source?: string;
   referred_by_name?: string;
   referred_by_email?: string;
@@ -150,11 +161,11 @@ export interface ActivityLog {
   id: string;
   company_id?: string;
   admin_id?: string;
-  action_type: string; // company_registered, job_created, job_updated, job_deleted, application_shortlisted, etc.
-  entity_type: string; // company, job, application, etc.
+  action_type: string;
+  entity_type: string;
   entity_id?: string;
   description: string;
-  metadata?: any; // JSON object with additional details
+  metadata?: string | Record<string, unknown>;
   created_at: string;
   admin?: Admin;
   company?: Company;
@@ -264,6 +275,8 @@ export const jobAPI = {
   getById: (id: string) => api.get<{ job: Job }>(`/jobs/${id}`),
   getPublic: (companyId: string) =>
     api.get<{ jobs: Job[] }>(`/jobs/public/${companyId}`),
+  getPublicById: (id: string) =>
+    publicApi.get<{ job: Job; accepting_applications: boolean }>(`/public/jobs/${id}`),
   update: (id: string, data: Partial<Job>) =>
     api.put<{ message: string; job: Job }>(`/jobs/${id}`, data),
   delete: (id: string) => api.delete<{ message: string }>(`/jobs/${id}`),
@@ -336,7 +349,6 @@ export interface RelationshipTimelineItem {
 
 // CRM APIs
 export const crmAPI = {
-  // Notes
   addNote: (applicationId: string, note: string, isPrivate: boolean) =>
     api.post<{ message: string; note: CandidateNote }>("/crm/notes", {
       application_id: applicationId,
@@ -355,7 +367,6 @@ export const crmAPI = {
   deleteNote: (noteId: string) =>
     api.delete<{ message: string }>(`/crm/notes/${noteId}`),
 
-  // Talent Pool
   addToTalentPool: (applicationId: string) =>
     api.post<{ message: string; application: Application }>(
       "/crm/talent-pool",
@@ -368,7 +379,6 @@ export const crmAPI = {
   getTalentPool: () =>
     api.get<{ applications: Application[]; count: number }>("/crm/talent-pool"),
 
-  // Referral
   updateReferral: (
     applicationId: string,
     referralSource: string,
@@ -386,7 +396,6 @@ export const crmAPI = {
       }
     ),
 
-  // Timeline
   getTimeline: (applicationId: string) =>
     api.get<{ timeline: RelationshipTimelineItem[]; count: number }>(
       `/crm/applications/${applicationId}/timeline`
@@ -434,24 +443,12 @@ export interface Message {
   created_at: string;
 }
 
-// Candidate Portal APIs (public, no auth - use separate axios instance)
-const publicApi = axios.create({
-  baseURL: API_BASE_URL,
-  // No auth interceptor for public endpoints
-});
-
-// Candidate Portal APIs (public, no auth)
 export const candidatePortalAPI = {
   checkStatus: (email: string, applicationId: string) =>
     publicApi.post<{ application: ApplicationStatus }>("/candidate/status", {
       email,
       application_id: applicationId,
     }),
-  getByEmail: (email: string) =>
-    publicApi.get<{ applications: ApplicationStatus[]; count: number }>(
-      "/candidate/applications",
-      { params: { email } }
-    ),
   sendMessage: (applicationId: string, email: string, message: string) =>
     publicApi.post<{ message: string; data: Message }>(
       "/candidate/messages/send",
@@ -470,7 +467,7 @@ export const candidatePortalAPI = {
     ),
 };
 
-// CV Matching Types (Local matching, no AI required)
+// CV scoring is local keyword matching; no external AI service is called.
 export interface CVAnalysisResult {
   match_score: number;
   skills: string[];
@@ -500,7 +497,6 @@ export interface BatchAIShortlistRequest {
   min_experience?: number;
   required_languages?: string[];
   match_job_description?: boolean;
-  threshold?: number;
 }
 
 // AI Shortlisting APIs
@@ -510,24 +506,22 @@ export const aiShortlistAPI = {
       message: string;
       application: Application;
       analysis: CVAnalysisResult;
-      auto_shortlisted: boolean;
     }>("/applications/ai-shortlist", data),
   analyzeBatch: (data: BatchAIShortlistRequest) =>
     api.post<{
       message: string;
       total_analyzed: number;
-      shortlisted_count: number;
       results: Array<{
         application_id: string;
         candidate_name: string;
-        match_score: number;
-        shortlisted: boolean;
-        analysis: CVAnalysisResult;
+        match_score?: number;
+        analysis?: CVAnalysisResult;
+        error?: string;
       }>;
     }>("/applications/ai-shortlist-batch", data),
 };
 
-// File Upload APIs (using separate axios instance without default Content-Type)
+// Uploads use their own instance so axios sets the multipart Content-Type.
 const uploadApi = axios.create({
   baseURL: API_BASE_URL,
 });

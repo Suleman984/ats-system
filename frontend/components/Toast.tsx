@@ -108,7 +108,7 @@ export default function ToastContainer() {
             toast.type
           )}`}
         >
-          <span className="text-lg font-bold flex-shrink-0">
+          <span className="text-lg font-bold shrink-0">
             {getIcon(toast.type)}
           </span>
           <p className="text-sm font-medium flex-1">{toast.message}</p>
@@ -117,7 +117,7 @@ export default function ToastContainer() {
               toasts = toasts.filter((t) => t.id !== toast.id);
               listeners.forEach((listener) => listener(toasts));
             }}
-            className="text-gray-500 hover:text-gray-700 flex-shrink-0"
+            className="text-gray-500 hover:text-gray-700 shrink-0"
           >
             ×
           </button>

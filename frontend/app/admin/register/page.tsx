@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { authAPI } from "@/lib/api";
+import { authAPI, errorMessage } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
 
 export default function RegisterPage() {
@@ -28,8 +28,8 @@ export default function RegisterPage() {
       const response = await authAPI.register(formData);
       login(response.data.admin, response.data.token);
       router.push("/admin/dashboard");
-    } catch (err: any) {
-      setError(err.response?.data?.error || "Registration failed");
+    } catch (err) {
+      setError(errorMessage(err, "Registration failed"));
     } finally {
       setLoading(false);
     }
@@ -144,9 +144,9 @@ export default function RegisterPage() {
             {formData.embedded_mode && (
               <div className="ml-6 bg-blue-50 border border-blue-200 rounded-lg p-3">
                 <p className="text-xs text-blue-800">
-                  <strong>Note:</strong> In embedded mode, you'll get an embed
+                  <strong>Note:</strong> In embedded mode, you&apos;ll get an embed
                   code to integrate the entire ATS dashboard into your website.
-                  You can still access it normally by logging in, but you'll
+                  You can still access it normally by logging in, but you&apos;ll
                   also have the option to embed it.
                 </p>
               </div>

@@ -1,15 +1,18 @@
 package controllers
 
 import (
+	"errors"
+	"net/http"
+	"strings"
+
 	"ats-backend/config"
 	"ats-backend/models"
 	"ats-backend/services"
 	"ats-backend/utils"
-	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 type LoginRequest struct {
@@ -18,129 +21,90 @@ type LoginRequest struct {
 }
 
 type RegisterRequest struct {
-	CompanyName  string `json:"company_name" binding:"required"`
-	Email        string `json:"email" binding:"required,email"`
-	Password     string `json:"password" binding:"required,min=6"`
-	Name         string `json:"name" binding:"required"`
-	EmbeddedMode bool   `json:"embedded_mode"` // Use embedded dashboard
-	EmbedDomain  string `json:"embed_domain"`  // Allowed domain for embedding (optional)
+	CompanyName  string `json:"company_name" binding:"required,max=255"`
+	Email        string `json:"email" binding:"required,email,max=255"`
+	Password     string `json:"password" binding:"required,min=8,max=72"`
+	Name         string `json:"name" binding:"required,max=255"`
+	EmbeddedMode bool   `json:"embedded_mode"`
+	EmbedDomain  string `json:"embed_domain" binding:"omitempty,max=255"`
 }
 
-// Login authenticates admin and returns JWT token
+// dummyHash keeps login timing the same whether or not the email exists.
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("timing-equalizer"), bcrypt.DefaultCost)
+
 func Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		badRequest(c, err)
 		return
 	}
 
 	var admin models.Admin
-	if err := config.DB.Where("email = ?", req.Email).First(&admin).Error; err != nil {
+	err := config.DB.Where("lower(email) = ?", strings.ToLower(req.Email)).First(&admin).Error
+	hash := dummyHash
+	if err == nil {
+		hash = []byte(admin.PasswordHash)
+	}
+	if bcrypt.CompareHashAndPassword(hash, []byte(req.Password)) != nil || err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 		return
 	}
 
-	// Verify password
-	if err := bcrypt.CompareHashAndPassword([]byte(admin.PasswordHash), []byte(req.Password)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
-		return
-	}
-
-	// Generate JWT token
-	token, err := utils.GenerateJWT(admin.ID.String(), admin.CompanyID.String())
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"token": token,
-		"admin": gin.H{
-			"id":         admin.ID,
-			"name":       admin.Name,
-			"email":      admin.Email,
-			"company_id": admin.CompanyID,
-		},
-	})
+	respondWithAdminToken(c, http.StatusOK, &admin, "")
 }
 
-// Register creates new company and admin account
 func Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		badRequest(c, err)
 		return
 	}
 
-	// Check if company already exists
-	var existingCompany models.Company
-	if err := config.DB.Where("email = ?", req.Email).First(&existingCompany).Error; err == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "Company already registered"})
+	hashed, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		serverError(c, "Failed to hash password")
 		return
 	}
 
-	// Create company
-	company := models.Company{
-		CompanyName:       req.CompanyName,
-		Email:             req.Email,
-		EmbeddedMode:      req.EmbeddedMode,
-		SubscriptionStatus: "trial",
-		SubscriptionTier:  "starter",
-		CreatedAt:         time.Now(),
-		UpdatedAt:         time.Now(),
-	}
-	
-	// Set embed domain if provided
+	email := strings.ToLower(req.Email)
+	company := models.Company{CompanyName: req.CompanyName, Email: email, EmbeddedMode: req.EmbeddedMode}
 	if req.EmbedDomain != "" {
 		company.EmbedDomain = &req.EmbedDomain
 	}
+	admin := models.Admin{Name: req.Name, Email: email, PasswordHash: string(hashed), Role: "admin"}
 
-	if err := config.DB.Create(&company).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create company"})
-		return
-	}
-
-	// Hash password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
-		return
-	}
-
-	// Create admin
-	admin := models.Admin{
-		CompanyID:    company.ID,
-		Name:         req.Name,
-		Email:        req.Email,
-		PasswordHash: string(hashedPassword),
-		Role:         "admin",
-		CreatedAt:    time.Now(),
-	}
-
-	if err := config.DB.Create(&admin).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create admin"})
-		return
-	}
-
-	// Log company registration
-	services.LogCompanyRegistered(company.ID, company.CompanyName, admin.Email)
-
-	// Generate token
-	token, err := utils.GenerateJWT(admin.ID.String(), admin.CompanyID.String())
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
-		return
-	}
-
-	c.JSON(http.StatusCreated, gin.H{
-		"message": "Registration successful",
-		"token":   token,
-		"admin": gin.H{
-			"id":         admin.ID,
-			"name":       admin.Name,
-			"email":      admin.Email,
-			"company_id": admin.CompanyID,
-		},
+	err = config.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&company).Error; err != nil {
+			return err
+		}
+		admin.CompanyID = company.ID
+		return tx.Create(&admin).Error
 	})
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		c.JSON(http.StatusConflict, gin.H{"error": "An account with this email already exists"})
+		return
+	}
+	if err != nil {
+		serverError(c, "Failed to create account")
+		return
+	}
+
+	services.LogCompanyRegistered(company.ID, admin.ID, company.CompanyName, admin.Email)
+	respondWithAdminToken(c, http.StatusCreated, &admin, "Registration successful")
 }
 
+func respondWithAdminToken(c *gin.Context, status int, admin *models.Admin, message string) {
+	token, err := utils.GenerateJWT(admin.ID, admin.CompanyID)
+	if err != nil {
+		serverError(c, "Failed to generate token")
+		return
+	}
+	body := gin.H{
+		"token": token,
+		"admin": gin.H{"id": admin.ID, "name": admin.Name, "email": admin.Email, "company_id": admin.CompanyID},
+	}
+	if message != "" {
+		body["message"] = message
+	}
+	c.JSON(status, body)
+}

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { applicationAPI, jobAPI, uploadAPI, Job } from "@/lib/api";
+import { applicationAPI, jobAPI, uploadAPI, errorMessage, type Job } from "@/lib/api";
 import { toast } from "@/components/Toast";
 
 export default function ApplyPage() {
@@ -10,6 +10,7 @@ export default function ApplyPage() {
   const router = useRouter();
   const jobId = params.jobId as string;
   const [job, setJob] = useState<Job | null>(null);
+  const [acceptingApplications, setAcceptingApplications] = useState(true);
   const [loading, setLoading] = useState(false);
   const [uploadingCV, setUploadingCV] = useState(false);
   const [uploadingPortfolio, setUploadingPortfolio] = useState(false);
@@ -32,27 +33,24 @@ export default function ApplyPage() {
     portfolio_type: "url" as "url" | "file",
   });
 
-  useEffect(() => {
-    fetchJob();
+  const fetchJob = useCallback(async () => {
+    try {
+      const { data } = await jobAPI.getPublicById(jobId);
+      setJob(data.job);
+      setAcceptingApplications(data.accepting_applications);
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to load job details"));
+    }
   }, [jobId]);
 
-  const fetchJob = async () => {
-    try {
-      // Note: We need a public endpoint to get job details by ID
-      // For now, we'll check status on submission, but ideally we'd fetch it here
-      setLoading(true);
-    } catch (error) {
-      console.error("Failed to fetch job:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    fetchJob();
+  }, [fetchJob]);
 
   const handleCVFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate file type
     const allowedTypes = [
       "application/pdf",
       "application/msword",
@@ -66,7 +64,6 @@ export default function ApplyPage() {
       return;
     }
 
-    // Validate file size (10MB)
     if (file.size > 10 * 1024 * 1024) {
       setCvUploadMessage("");
       toast.error("File size exceeds 10MB limit.");
@@ -80,9 +77,9 @@ export default function ApplyPage() {
       setFormData({ ...formData, resume_url: response.data.file_url });
       setCvUploadMessage("✓ CV uploaded successfully!");
       setTimeout(() => setCvUploadMessage(""), 5000); // Clear message after 5 seconds
-    } catch (error: any) {
+    } catch (error) {
       setCvUploadMessage("");
-      toast.error(error.response?.data?.error || "Failed to upload CV");
+      toast.error(errorMessage(error, "Failed to upload CV"));
     } finally {
       setUploadingCV(false);
     }
@@ -94,7 +91,6 @@ export default function ApplyPage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate file type
     const allowedTypes = [
       "application/pdf",
       "application/zip",
@@ -109,7 +105,6 @@ export default function ApplyPage() {
       return;
     }
 
-    // Validate file size (10MB)
     if (file.size > 10 * 1024 * 1024) {
       setPortfolioUploadMessage("");
       toast.error("File size exceeds 10MB limit.");
@@ -123,9 +118,9 @@ export default function ApplyPage() {
       setFormData({ ...formData, portfolio_url: response.data.file_url });
       setPortfolioUploadMessage("✓ Portfolio uploaded successfully!");
       setTimeout(() => setPortfolioUploadMessage(""), 5000); // Clear message after 5 seconds
-    } catch (error: any) {
+    } catch (error) {
       setPortfolioUploadMessage("");
-      toast.error(error.response?.data?.error || "Failed to upload portfolio");
+      toast.error(errorMessage(error, "Failed to upload portfolio"));
     } finally {
       setUploadingPortfolio(false);
     }
@@ -134,7 +129,6 @@ export default function ApplyPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // Validate resume
     if (!formData.resume_url) {
       toast.error("Please provide a CV/resume (either URL or file upload)");
       return;
@@ -149,7 +143,6 @@ export default function ApplyPage() {
         "Application submitted successfully! Check your email for confirmation."
       );
 
-      // Optionally redirect to status page
       if (applicationId && formData.email) {
         setTimeout(() => {
           const redirect = window.confirm(
@@ -157,7 +150,7 @@ export default function ApplyPage() {
           );
           if (redirect) {
             router.push(
-              `/application-status?email=${encodeURIComponent(formData.email)}`
+              `/application-status?email=${encodeURIComponent(formData.email)}&applicationId=${applicationId}`
             );
           } else {
             router.push("/");
@@ -166,17 +159,8 @@ export default function ApplyPage() {
       } else {
         setTimeout(() => router.push("/"), 1500);
       }
-    } catch (error: any) {
-      // Check if job is closed or deadline passed
-      if (error.response?.data?.message) {
-        toast.error(error.response.data.message);
-        // If job is closed, redirect back after showing message
-        if (error.response.data.message.includes("closed")) {
-          setTimeout(() => router.push("/"), 3000);
-        }
-      } else {
-        toast.error("Failed to submit application. Please try again.");
-      }
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to submit application. Please try again."));
     } finally {
       setLoading(false);
     }
@@ -186,7 +170,19 @@ export default function ApplyPage() {
     <div className="min-h-screen bg-gray-50 py-12">
       <div className="max-w-3xl mx-auto px-6">
         <div className="bg-white rounded-lg shadow-lg p-8">
-          <h1 className="text-3xl font-bold mb-6">Job Application</h1>
+          <h1 className="text-3xl font-bold mb-2">{job ? job.title : "Job Application"}</h1>
+          {job && (
+            <p className="text-gray-600 mb-6">
+              {[job.location, job.job_type, `Apply by ${new Date(job.deadline).toLocaleDateString()}`]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+          )}
+          {!acceptingApplications && (
+            <div className="mb-6 rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-yellow-800">
+              This job is no longer accepting applications.
+            </div>
+          )}
           <form onSubmit={handleSubmit} className="space-y-6">
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -243,7 +239,7 @@ export default function ApplyPage() {
                   onChange={(e) =>
                     setFormData({
                       ...formData,
-                      years_of_experience: parseInt(e.target.value),
+                      years_of_experience: parseInt(e.target.value) || 0,
                     })
                   }
                 />
@@ -292,7 +288,7 @@ export default function ApplyPage() {
                       name="resume_type"
                       value="url"
                       checked={formData.resume_type === "url"}
-                      onChange={(e) =>
+                      onChange={() =>
                         setFormData({
                           ...formData,
                           resume_type: "url" as const,
@@ -308,7 +304,7 @@ export default function ApplyPage() {
                       name="resume_type"
                       value="file"
                       checked={formData.resume_type === "file"}
-                      onChange={(e) =>
+                      onChange={() =>
                         setFormData({
                           ...formData,
                           resume_type: "file" as const,
@@ -374,7 +370,7 @@ export default function ApplyPage() {
                       name="portfolio_type"
                       value="url"
                       checked={formData.portfolio_type === "url"}
-                      onChange={(e) =>
+                      onChange={() =>
                         setFormData({
                           ...formData,
                           portfolio_type: "url" as const,
@@ -390,7 +386,7 @@ export default function ApplyPage() {
                       name="portfolio_type"
                       value="file"
                       checked={formData.portfolio_type === "file"}
-                      onChange={(e) =>
+                      onChange={() =>
                         setFormData({
                           ...formData,
                           portfolio_type: "file" as const,
@@ -458,7 +454,7 @@ export default function ApplyPage() {
             </div>
             <button
               type="submit"
-              disabled={loading || uploadingCV || uploadingPortfolio}
+              disabled={loading || uploadingCV || uploadingPortfolio || !acceptingApplications}
               className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 disabled:bg-blue-300 font-semibold"
             >
               {loading ? "Submitting..." : "Submit Application"}

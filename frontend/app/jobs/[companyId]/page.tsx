@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { jobAPI, Job } from "@/lib/api";
+import { jobAPI, Job, errorMessage } from "@/lib/api";
+import { toast } from "@/components/Toast";
 import Link from "next/link";
 
 export default function PublicJobsPage() {
@@ -11,20 +12,20 @@ export default function PublicJobsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchJobs();
-  }, [companyId]);
-
-  const fetchJobs = async () => {
+  const fetchJobs = useCallback(async () => {
     try {
       const response = await jobAPI.getPublic(companyId);
       setJobs(response.data.jobs);
     } catch (error) {
-      console.error("Failed to fetch jobs:", error);
+      toast.error(errorMessage(error, "Failed to fetch jobs"));
     } finally {
       setLoading(false);
     }
-  };
+  }, [companyId]);
+
+  useEffect(() => {
+    fetchJobs();
+  }, [fetchJobs]);
 
   if (loading) return <div className="p-6">Loading...</div>;
 

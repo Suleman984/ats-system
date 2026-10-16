@@ -18,7 +18,7 @@ export default function RootLayout({
       <body>
         <ModeIndicator />
         <ToastContainer />
-        <div className="pt-7">{children}</div>
+        <div className={process.env.NEXT_PUBLIC_APP_MODE === "production" ? "" : "pt-7"}>{children}</div>
       </body>
     </html>
   );

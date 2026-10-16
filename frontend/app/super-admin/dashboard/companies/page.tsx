@@ -1,26 +1,27 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { superAdminAPI, CompanyWithStats } from "@/lib/api";
+import { superAdminAPI, CompanyWithStats, errorMessage } from "@/lib/api";
+import { toast } from "@/components/Toast";
 
 export default function CompaniesPage() {
   const [companies, setCompanies] = useState<CompanyWithStats[]>([]);
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchCompanies();
-  }, []);
 
   const fetchCompanies = async () => {
     try {
       const response = await superAdminAPI.getAllCompanies();
       setCompanies(response.data.companies);
     } catch (error) {
-      console.error("Failed to fetch companies:", error);
+      toast.error(errorMessage(error, "Failed to fetch companies"));
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchCompanies();
+  }, []);
 
   if (loading) return <div className="p-6">Loading...</div>;
 

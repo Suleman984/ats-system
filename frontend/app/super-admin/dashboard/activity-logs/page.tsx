@@ -1,15 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   superAdminActivityLogAPI,
-  ActivityLog,
   superAdminAPI,
+  errorMessage,
+  type ActivityLog,
+  type CompanyWithStats,
 } from "@/lib/api";
+import { toast } from "@/components/Toast";
 
 export default function SuperAdminActivityLogsPage() {
   const [logs, setLogs] = useState<ActivityLog[]>([]);
-  const [companies, setCompanies] = useState<any[]>([]);
+  const [companies, setCompanies] = useState<CompanyWithStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState({
     company_id: "",
@@ -20,37 +23,28 @@ export default function SuperAdminActivityLogsPage() {
   });
 
   useEffect(() => {
-    fetchCompanies();
-    fetchLogs();
-  }, [filters]);
+    superAdminAPI
+      .getAllCompanies()
+      .then(({ data }) => setCompanies(data.companies))
+      .catch((error) => toast.error(errorMessage(error, "Failed to fetch companies")));
+  }, []);
 
-  const fetchCompanies = async () => {
-    try {
-      const response = await superAdminAPI.getAllCompanies();
-      setCompanies(response.data.companies);
-    } catch (error) {
-      console.error("Failed to fetch companies:", error);
-    }
-  };
-
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     try {
       setLoading(true);
-      const params: any = {};
-      if (filters.company_id) params.company_id = filters.company_id;
-      if (filters.action_type) params.action_type = filters.action_type;
-      if (filters.entity_type) params.entity_type = filters.entity_type;
-      if (filters.date_from) params.date_from = filters.date_from;
-      if (filters.date_to) params.date_to = filters.date_to;
-
+      const params = Object.fromEntries(Object.entries(filters).filter(([, value]) => value));
       const response = await superAdminActivityLogAPI.getAll(params);
       setLogs(response.data.logs || []);
     } catch (error) {
-      console.error("Failed to fetch activity logs:", error);
+      toast.error(errorMessage(error, "Failed to fetch activity logs"));
     } finally {
       setLoading(false);
     }
-  };
+  }, [filters]);
+
+  useEffect(() => {
+    fetchLogs();
+  }, [fetchLogs]);
 
   const getActionIcon = (actionType: string) => {
     const icons: Record<string, string> = {

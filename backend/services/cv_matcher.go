@@ -1,17 +1,23 @@
 package services
 
 import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
-	"log"
-	"net/http"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
 
-// Criteria defines the shortlisting criteria
+// Criteria defines what a job requires from a CV.
 type Criteria struct {
 	RequiredSkills      []string `json:"required_skills"`
 	MinExperience       int      `json:"min_experience"`
@@ -21,655 +27,58 @@ type Criteria struct {
 	JobRequirements     string   `json:"job_requirements,omitempty"`
 }
 
-// MatchResult contains the matching analysis results
 type MatchResult struct {
-	MatchScore      int      `json:"match_score"`      // 0-100 percentage
-	Skills          []string `json:"skills"`          // Skills found in CV
-	Experience      int      `json:"experience"`       // Years of experience extracted
-	Education       string   `json:"education"`       // Education level (for compatibility)
-	Languages       []string `json:"languages"`       // Languages found
-	Summary         string   `json:"summary"`         // Brief summary
-	MatchReason     string   `json:"match_reason"`    // Why matched/not matched
-	MissingSkills   []string `json:"missing_skills"`  // Skills from criteria not found
-	Strengths       []string `json:"strengths"`       // Key strengths found
-	SkillsMatch     int      `json:"skills_match"`    // Skills match percentage
-	ExperienceMatch int      `json:"experience_match"` // Experience match percentage
-	LanguageMatch   int      `json:"language_match"`  // Language match percentage
+	MatchScore      int      `json:"match_score"`
+	Skills          []string `json:"skills"`
+	Experience      int      `json:"experience"`
+	Education       string   `json:"education"`
+	Languages       []string `json:"languages"`
+	Summary         string   `json:"summary"`
+	MatchReason     string   `json:"match_reason"`
+	MissingSkills   []string `json:"missing_skills"`
+	Strengths       []string `json:"strengths"`
+	SkillsMatch     int      `json:"skills_match"`
+	ExperienceMatch int      `json:"experience_match"`
+	LanguageMatch   int      `json:"language_match"`
 }
 
-// ExtractTextFromURL downloads and extracts text from CV file
-func ExtractTextFromURL(cvURL string) (string, error) {
-	// Download the file
-	resp, err := http.Get(cvURL)
-	if err != nil {
-		return "", fmt.Errorf("failed to download CV: %w", err)
-	}
-	defer resp.Body.Close()
+const minCVTextLength = 50
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to download CV: status %d", resp.StatusCode)
+var (
+	pdfParenText    = regexp.MustCompile(`\(([^)]+)\)`)
+	pdfObjectRef    = regexp.MustCompile(`^\d+\s+\d+\s*R$`)
+	pdfObjectHeader = regexp.MustCompile(`^\d+\s*obj$|^endobj$`)
+	whitespaceRun   = regexp.MustCompile(`\s+`)
+	pdfArtifacts    = []*regexp.Regexp{
+		regexp.MustCompile(`\b(?:Pg|P)\s+\d+\s+\d+\s*R\b`),
+		regexp.MustCompile(`\b\d+\s+\d+\s*R\b`),
+		regexp.MustCompile(`\b\d+(?:\s+\d+)?\s*obj\b`),
+		regexp.MustCompile(`\b(?:Type\s+)?StructElem\b`),
+		regexp.MustCompile(`\b(?:endobj|endstream|stream)\b`),
+		regexp.MustCompile(`/\w+\s+\d+`),
 	}
-
-	// Read file content
-	fileBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read CV file: %w", err)
+	pdfStructureMarkers = []string{
+		"pg ", "endobj", "obj", "type", "structelem", "r ", "stream", "xref", "trailer",
+		"startxref", "/filter", "/length", "/w", "/font", "/subtype", "/resources", "/mediabox", "/contents",
 	}
-
-	contentType := resp.Header.Get("Content-Type")
-	
-	// For text files
-	if strings.Contains(contentType, "text/plain") || strings.HasSuffix(cvURL, ".txt") {
-		return string(fileBytes), nil
-	}
-	
-	// For PDFs - extract text (enhanced approach: multiple extraction methods)
-	if strings.Contains(contentType, "pdf") || strings.HasSuffix(cvURL, ".pdf") {
-		// Try extracting from PDF text objects first (BT/ET markers) - most reliable
-		text := extractTextFromPDFObjects(fileBytes)
-		
-		// Clean the text to remove PDF artifacts
-		text = cleanPDFText(text)
-		
-		// Validate extracted text
-		if len(text) > 100 && isValidUTF8(text) {
-			// Check if text looks like actual text (not binary garbage)
-			if isValidTextContent(text) {
-				return text, nil
-			}
-		}
-		
-		// If first method didn't work, try extracting from PDF streams
-		text = extractTextFromPDF(fileBytes)
-		text = cleanPDFText(text) // Clean again
-		
-		if len(text) > 100 && isValidUTF8(text) {
-			if isValidTextContent(text) {
-				return text, nil
-			}
-		}
-		
-		// Last resort: try extracting readable text (but be very strict)
-		text = extractReadableText(fileBytes)
-		text = cleanPDFText(text) // Clean again
-		
-		if len(text) > 100 && isValidUTF8(text) && isValidTextContent(text) {
-			return text, nil
-		}
-		
-		// If extraction fails, return error with helpful message
-		return "", fmt.Errorf("could not extract text from PDF. Please ensure PDF contains readable text (not scanned images). For scanned PDFs, consider using OCR tools first.")
-	}
-	
-	// For DOCX - try to extract text
-	if strings.Contains(contentType, "wordprocessingml") || strings.HasSuffix(cvURL, ".docx") {
-		// Simple DOCX text extraction
-		text := extractTextFromDOCX(fileBytes)
-		if len(text) > 100 {
-			return text, nil
-		}
-	}
-	
-	// For DOC - try to extract text
-	if strings.Contains(contentType, "msword") || strings.HasSuffix(cvURL, ".doc") {
-		// DOC files are binary, harder to parse without library
-		// Try to extract readable text
-		text := extractReadableText(fileBytes)
-		if len(text) > 100 {
-			return text, nil
-		}
-	}
-	
-	// Fallback: try to extract any readable text
-	text := extractReadableText(fileBytes)
-	if len(text) > 100 {
-		return text, nil
-	}
-	
-	return "", fmt.Errorf("could not extract readable text from CV file. Supported formats: PDF (with readable text), DOC, DOCX, TXT. For scanned images, please convert to text first.")
-}
-
-// extractTextFromPDF extracts text from PDF bytes (simple approach)
-func extractTextFromPDF(data []byte) string {
-	// Simple PDF text extraction: look for text streams
-	// This is a basic implementation - for production, use a library like pdfcpu
-	text := ""
-	
-	// Look for text between stream markers (but be careful - streams can be compressed)
-	streamStart := []byte("stream")
-	streamEnd := []byte("endstream")
-	
-	startIdx := 0
-	for {
-		idx := findBytes(data[startIdx:], streamStart)
-		if idx == -1 {
-			break
-		}
-		idx += startIdx
-		
-		endIdx := findBytes(data[idx:], streamEnd)
-		if endIdx == -1 {
-			break
-		}
-		endIdx += idx
-		
-		// Extract text from stream (skip if it looks like compressed data)
-		streamData := data[idx+len(streamStart) : endIdx]
-		
-		// Check if stream is compressed (FlateDecode, etc.) - skip those
-		// Look backwards from stream start for /Filter
-		streamHeader := data[max(0, idx-200):idx]
-		if strings.Contains(string(streamHeader), "/FlateDecode") || 
-		   strings.Contains(string(streamHeader), "/LZWDecode") ||
-		   strings.Contains(string(streamHeader), "/DCTDecode") {
-			// Compressed stream - skip
-			startIdx = endIdx + len(streamEnd)
-			continue
-		}
-		
-		// Try to extract readable text from stream
-		streamText := extractReadableText(streamData)
-		// Clean PDF artifacts from stream text
-		streamText = cleanPDFText(streamText)
-		if len(streamText) > 10 { // Only add if we got meaningful text
-			text += streamText + " "
-		}
-		
-		startIdx = endIdx + len(streamEnd)
-	}
-	
-	// Final cleanup
-	text = cleanPDFText(text)
-	return strings.TrimSpace(text)
-}
-
-// extractTextFromPDFObjects extracts text from PDF text objects (BT/ET markers)
-func extractTextFromPDFObjects(data []byte) string {
-	text := ""
-	
-	// Look for text objects: BT (Begin Text) ... ET (End Text)
-	btMarker := []byte("BT")
-	etMarker := []byte("ET")
-	
-	startIdx := 0
-	for {
-		btIdx := findBytes(data[startIdx:], btMarker)
-		if btIdx == -1 {
-			break
-		}
-		btIdx += startIdx
-		
-		etIdx := findBytes(data[btIdx:], etMarker)
-		if etIdx == -1 {
-			break
-		}
-		etIdx += btIdx
-		
-		// Extract text between BT and ET
-		textObj := data[btIdx+len(btMarker) : etIdx]
-		
-		// Look for text strings: (text) or <hex>
-		// Pattern: (text content) - this is the main PDF text format
-		parenPattern := regexp.MustCompile(`\(([^)]+)\)`)
-		matches := parenPattern.FindAllSubmatch(textObj, -1)
-		for _, match := range matches {
-			if len(match) > 1 {
-				textStr := string(match[1])
-				// Filter out PDF structure markers
-				if !isPDFStructureMarker(textStr) {
-					// Validate it's readable text
-					if isValidUTF8(textStr) && isValidTextContent(textStr) {
-						text += textStr + " "
-					}
-				}
-			}
-		}
-		
-		startIdx = etIdx + len(etMarker)
-	}
-	
-	// Clean the extracted text to remove PDF artifacts
-	cleanedText := cleanPDFText(text)
-	return strings.TrimSpace(cleanedText)
-}
-
-// isPDFStructureMarker checks if a string is a PDF structure marker (not actual content)
-func isPDFStructureMarker(s string) bool {
-	// Common PDF structure markers to filter out
-	markers := []string{
-		"Pg ", "endobj", "obj", "Type", "StructElem", "R ", "stream", "endstream",
-		"xref", "trailer", "startxref", "/Filter", "/Length", "/W", "/Font",
-		"/Subtype", "/Type", "/Resources", "/MediaBox", "/Contents",
-	}
-	
-	sLower := strings.ToLower(strings.TrimSpace(s))
-	for _, marker := range markers {
-		if strings.Contains(sLower, strings.ToLower(marker)) {
-			return true
-		}
-	}
-	
-	// Check for patterns like "Pg 7 0 R" or "84 0 R"
-	if matched, _ := regexp.MatchString(`^\d+\s+\d+\s*R$`, s); matched {
-		return true
-	}
-	
-	// Check for patterns like "0 obj" or "endobj"
-	if matched, _ := regexp.MatchString(`^\d+\s*obj$|^endobj$`, s); matched {
-		return true
-	}
-	
-	return false
-}
-
-// cleanPDFText removes PDF structure artifacts from extracted text
-func cleanPDFText(text string) string {
-	if text == "" {
-		return text
-	}
-	
-	// Remove common PDF structure patterns
-	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`\bPg\s+\d+\s+\d+\s*R\b`),           // "Pg 7 0 R"
-		regexp.MustCompile(`\b\d+\s+\d+\s*R\b`),                // "84 0 R"
-		regexp.MustCompile(`\b\d+\s*obj\b`),                    // "32 0 obj"
-		regexp.MustCompile(`\bendobj\b`),                       // "endobj"
-		regexp.MustCompile(`\bType\s+StructElem\b`),            // "Type StructElem"
-		regexp.MustCompile(`\bStructElem\b`),                  // "StructElem"
-		regexp.MustCompile(`\bstream\b`),                       // "stream"
-		regexp.MustCompile(`\bendstream\b`),                   // "endstream"
-		regexp.MustCompile(`/\w+\s+\d+`),                       // "/Filter 5" or "/Length 123"
-		regexp.MustCompile(`\b\d+\s*0\s*obj\b`),               // "32 0 obj"
-		regexp.MustCompile(`\b\d+\s+0\s+R\s+endobj\b`),        // "32 0 R endobj"
-		regexp.MustCompile(`\bPg\s+\d+\s+0\s+R\s+endobj\b`),   // "Pg 7 0 R endobj"
-		regexp.MustCompile(`\b\d+\s+0\s+R\b`),                 // "84 0 R" (standalone)
-		regexp.MustCompile(`\b\d+\s+obj\s+Type\b`),            // "32 obj Type"
-		regexp.MustCompile(`\b\d+\s+0\s+obj\b`),               // "32 0 obj"
-	}
-	
-	cleaned := text
-	for _, pattern := range patterns {
-		cleaned = pattern.ReplaceAllString(cleaned, " ")
-	}
-	
-	// Remove patterns like "P 84 0 R" or "P 85 0 R" (PDF object references)
-	cleaned = regexp.MustCompile(`\bP\s+\d+\s+\d+\s*R\b`).ReplaceAllString(cleaned, " ")
-	
-	// Remove multiple spaces
-	cleaned = regexp.MustCompile(`\s+`).ReplaceAllString(cleaned, " ")
-	
-	// Remove leading/trailing spaces
-	cleaned = strings.TrimSpace(cleaned)
-	
-	return cleaned
-}
-
-// isValidTextContent checks if text looks like actual readable content
-func isValidTextContent(text string) bool {
-	if len(text) == 0 {
-		return false
-	}
-	
-	// Count letters vs non-letters
-	letterCount := 0
-	totalChars := 0
-	
-	for _, r := range text {
-		if unicode.IsLetter(r) {
-			letterCount++
-		}
-		if !unicode.IsSpace(r) {
-			totalChars++
-		}
-	}
-	
-	// If less than 30% are letters, it's probably not readable text
-	if totalChars > 0 && (letterCount*100/totalChars) < 30 {
-		return false
-	}
-	
-	// Check for common words (basic validation)
-	commonWords := []string{"the", "and", "or", "is", "are", "was", "were", "be", "been", "have", "has", "had"}
-	textLower := strings.ToLower(text)
-	foundWords := 0
-	for _, word := range commonWords {
-		if strings.Contains(textLower, word) {
-			foundWords++
-		}
-	}
-	
-	// If we found at least one common word, it's likely readable text
-	// Or if text is long enough and has reasonable letter ratio
-	if foundWords > 0 || (len(text) > 200 && letterCount > 50) {
-		return true
-	}
-	
-	return false
-}
-
-// max returns the maximum of two integers
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-// extractTextFromDOCX extracts text from DOCX (ZIP-based format)
-func extractTextFromDOCX(data []byte) string {
-	// DOCX is a ZIP file containing XML
-	// Look for document.xml content
-	// Enhanced approach: extract readable text from XML with better patterns
-	text := ""
-	
-	// Look for text in XML tags - multiple patterns for better extraction
-	xmlPatterns := []*regexp.Regexp{
-		regexp.MustCompile(`<w:t[^>]*>([^<]+)</w:t>`),           // Standard Word text
-		regexp.MustCompile(`<t[^>]*>([^<]+)</t>`),              // Alternative text tag
-		regexp.MustCompile(`<text[^>]*>([^<]+)</text>`),        // Generic text tag
-		regexp.MustCompile(`xml:space="preserve">([^<]+)</w:t>`), // Preserved space text
-	}
-	
-	for _, pattern := range xmlPatterns {
-		matches := pattern.FindAllStringSubmatch(string(data), -1)
-		for _, match := range matches {
-			if len(match) > 1 {
-				text += match[1] + " "
-			}
-		}
-	}
-	
-	// Also try to extract from raw XML if patterns didn't work well
-	if len(text) < 100 {
-		// Fallback: extract any readable text between tags
-		fallbackPattern := regexp.MustCompile(`>([A-Za-z0-9\s\.\,\:\;\!\?\-]+)<`)
-		matches := fallbackPattern.FindAllStringSubmatch(string(data), -1)
-		for _, match := range matches {
-			if len(match) > 1 && len(match[1]) > 2 {
-				text += match[1] + " "
-			}
-		}
-	}
-	
-	return strings.TrimSpace(text)
-}
-
-// extractReadableText extracts readable ASCII/Unicode text from binary data
-// IMPROVED: Better filtering to avoid storing binary PDF data
-func extractReadableText(data []byte) string {
-	var text strings.Builder
-	var word strings.Builder
-	validCharCount := 0
-	totalBytes := len(data)
-	
-	// Only process if we have reasonable amount of data
-	if totalBytes == 0 {
-		return ""
-	}
-	
-	for _, b := range data {
-		// Only accept valid ASCII printable characters (0x20-0x7E) and common whitespace
-		// This prevents binary PDF data from being stored
-		if (b >= 0x20 && b <= 0x7E) || b == '\n' || b == '\r' || b == '\t' {
-			if unicode.IsLetter(rune(b)) || unicode.IsDigit(rune(b)) || b == ' ' || b == '-' || b == '_' || b == '.' || b == ',' {
-				word.WriteByte(b)
-				validCharCount++
-			} else if word.Len() > 0 {
-				// End of word
-				wordStr := word.String()
-				if len(wordStr) > 2 { // Only add words longer than 2 chars
-					text.WriteString(wordStr)
-					text.WriteByte(' ')
-				}
-				word.Reset()
-			}
-		} else if word.Len() > 0 {
-			// End of word on non-printable
-			wordStr := word.String()
-			if len(wordStr) > 2 {
-				text.WriteString(wordStr)
-				text.WriteByte(' ')
-			}
-			word.Reset()
-		}
-	}
-	
-	// Add last word
-	if word.Len() > 2 {
-		text.WriteString(word.String())
-	}
-	
-	result := strings.TrimSpace(text.String())
-	
-	// Validate: If less than 5% of bytes were valid text, this is likely binary data
-	if totalBytes > 0 && (validCharCount*100/totalBytes) < 5 {
-		return "" // Likely binary data, return empty
-	}
-	
-	// Validate UTF-8 encoding
-	if !isValidUTF8(result) {
-		return "" // Invalid UTF-8, return empty
-	}
-	
-	return result
-}
-
-// isValidUTF8 checks if a string is valid UTF-8
-func isValidUTF8(s string) bool {
-	// Try to convert to runes - if it fails, it's not valid UTF-8
-	for _, r := range s {
-		if r == utf8.RuneError {
-			return false
-		}
-	}
-	return true
-}
-
-// findBytes finds byte sequence in data
-func findBytes(data []byte, pattern []byte) int {
-	if len(pattern) == 0 || len(data) < len(pattern) {
-		return -1
-	}
-	
-	for i := 0; i <= len(data)-len(pattern); i++ {
-		match := true
-		for j := 0; j < len(pattern); j++ {
-			if data[i+j] != pattern[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return i
-		}
-	}
-	
-	return -1
-}
-
-// ExtractExperience extracts years of experience from CV text
-func ExtractExperience(cvText string) int {
-	// Look for patterns like "5 years", "3+ years", "experience: 4 years"
-	experiencePatterns := []*regexp.Regexp{
+	experiencePatterns = []*regexp.Regexp{
 		regexp.MustCompile(`(\d+)\s*\+?\s*years?\s*(?:of\s*)?experience`),
 		regexp.MustCompile(`experience[:\s]+(\d+)\s*years?`),
-		regexp.MustCompile(`(\d+)\s*years?\s*experience`),
-		regexp.MustCompile(`(\d+)\s*y\.?o\.?e\.?`), // years of experience
+		regexp.MustCompile(`(\d+)\s*y\.?o\.?e\.?`),
 	}
-	
-	maxYears := 0
-	cvLower := strings.ToLower(cvText)
-	
-	for _, pattern := range experiencePatterns {
-		matches := pattern.FindAllStringSubmatch(cvLower, -1)
-		for _, match := range matches {
-			if len(match) > 1 {
-				var years int
-				fmt.Sscanf(match[1], "%d", &years)
-				if years > maxYears {
-					maxYears = years
-				}
-			}
-		}
+	yearPattern  = regexp.MustCompile(`(?:19|20)\d{2}`)
+	titlePattern = []*regexp.Regexp{
+		regexp.MustCompile(`(?:position|role|title|job)[:\s]+([a-z\s]+(?:developer|engineer|manager|analyst|designer|lead|architect))`),
+		regexp.MustCompile(`([a-z\s]+(?:developer|engineer|manager|analyst|designer|lead|architect))`),
 	}
-	
-	// If no explicit experience found, try to estimate from dates
-	if maxYears == 0 {
-		// Look for date ranges (e.g., "2020 - 2024", "Jan 2020 - Present")
-		dateRangePattern := regexp.MustCompile(`(?:19|20)\d{2}`)
-		dates := dateRangePattern.FindAllString(cvText, -1)
-		if len(dates) >= 2 {
-			var startYear, endYear int
-			fmt.Sscanf(dates[0], "%d", &startYear)
-			fmt.Sscanf(dates[len(dates)-1], "%d", &endYear)
-			if endYear > startYear {
-				maxYears = endYear - startYear
-			}
-		}
-	}
-	
-	return maxYears
-}
-
-// ExtractSkills extracts skills from CV text with synonym recognition and inference
-func ExtractSkills(cvText string, requiredSkills []string) []string {
-	foundSkills := []string{}
-	cvLower := strings.ToLower(cvText)
-	
-	// Extract job title from CV for skills inference
-	jobTitle := extractJobTitleFromCV(cvText)
-	inferredSkills := InferSkillsFromJobTitle(jobTitle)
-	
-	// Check each required skill with synonym matching
-	for _, skill := range requiredSkills {
-		normalizedSkill := NormalizeSkill(skill)
-		
-		// Direct match
-		if strings.Contains(cvLower, normalizedSkill) {
-			foundSkills = append(foundSkills, skill)
-			continue
-		}
-		
-		// Try word boundary matching
-		skillRegex := regexp.MustCompile(`\b` + regexp.QuoteMeta(normalizedSkill) + `\b`)
-		if skillRegex.MatchString(cvLower) {
-			foundSkills = append(foundSkills, skill)
-			continue
-		}
-		
-		// Try synonym matching
-		synonyms := GetSkillSynonyms(skill)
-		matched := false
-		for _, synonym := range synonyms {
-			synonymNormalized := NormalizeSkill(synonym)
-			if strings.Contains(cvLower, synonymNormalized) {
-				foundSkills = append(foundSkills, skill)
-				matched = true
-				break
-			}
-			// Try word boundary for synonyms too
-			synonymRegex := regexp.MustCompile(`\b` + regexp.QuoteMeta(synonymNormalized) + `\b`)
-			if synonymRegex.MatchString(cvLower) {
-				foundSkills = append(foundSkills, skill)
-				matched = true
-				break
-			}
-		}
-		if matched {
-			continue
-		}
-		
-		// Try partial match for compound skills (e.g., "React.js" matches "React")
-		skillWords := strings.Fields(normalizedSkill)
-		if len(skillWords) > 0 {
-			firstWord := skillWords[0]
-			if len(firstWord) > 3 && strings.Contains(cvLower, firstWord) {
-				foundSkills = append(foundSkills, skill)
-				continue
-			}
-		}
-		
-		// Try skills inference - if required skill matches inferred skills
-		for _, inferred := range inferredSkills {
-			if strings.Contains(strings.ToLower(inferred), normalizedSkill) || 
-			   strings.Contains(normalizedSkill, strings.ToLower(inferred)) {
-				foundSkills = append(foundSkills, skill)
-				break
-			}
-		}
-	}
-	
-	// Also extract common skills mentioned in CV (even if not required)
-	commonSkills := []string{
+	commonSkills = []string{
 		"javascript", "python", "java", "react", "node.js", "sql", "html", "css",
 		"typescript", "angular", "vue", "php", "ruby", "go", "rust", "c++", "c#",
 		"aws", "docker", "kubernetes", "git", "mongodb", "postgresql", "mysql",
 		"agile", "scrum", "api", "rest", "graphql", "microservices",
 	}
-	
-	for _, skill := range commonSkills {
-		skillLower := strings.ToLower(skill)
-		if strings.Contains(cvLower, skillLower) && !contains(foundSkills, skill) {
-			// Check synonyms too
-			synonyms := GetSkillSynonyms(skill)
-			hasSynonym := false
-			for _, synonym := range synonyms {
-				if strings.Contains(cvLower, strings.ToLower(synonym)) {
-					hasSynonym = true
-					break
-				}
-			}
-			if hasSynonym || strings.Contains(cvLower, skillLower) {
-				foundSkills = append(foundSkills, skill)
-			}
-		}
-	}
-	
-	// Add inferred skills from job title (if not already found)
-	for _, inferred := range inferredSkills {
-		if !contains(foundSkills, inferred) {
-			inferredLower := strings.ToLower(inferred)
-			if strings.Contains(cvLower, inferredLower) {
-				foundSkills = append(foundSkills, inferred)
-			}
-		}
-	}
-	
-	return foundSkills
-}
-
-// extractJobTitleFromCV extracts job title from CV text
-func extractJobTitleFromCV(cvText string) string {
-	cvLower := strings.ToLower(cvText)
-	
-	// Look for common job title patterns
-	titlePatterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(?:position|role|title|job)[:\s]+([a-z\s]+(?:developer|engineer|manager|analyst|designer|lead|architect))`),
-		regexp.MustCompile(`(?i)(senior|junior|mid-level)?\s*([a-z\s]+(?:developer|engineer|manager|analyst|designer|lead|architect))`),
-		regexp.MustCompile(`(?i)([a-z\s]+(?:developer|engineer|manager|analyst|designer|lead|architect))`),
-	}
-	
-	for _, pattern := range titlePatterns {
-		matches := pattern.FindStringSubmatch(cvLower)
-		if len(matches) > 1 {
-			title := strings.TrimSpace(matches[1])
-			if len(title) > 3 && len(title) < 50 {
-				return title
-			}
-		}
-	}
-	
-	return ""
-}
-
-// ExtractLanguages extracts languages from CV text
-func ExtractLanguages(cvText string, requiredLanguages []string) []string {
-	foundLanguages := []string{}
-	cvLower := strings.ToLower(cvText)
-	
-	// Common language patterns
-	languagePatterns := map[string][]string{
-		"english":    {"english", "fluent english", "native english"},
+	languageAliases = map[string][]string{
+		"english":    {"english"},
 		"spanish":    {"spanish", "español", "castellano"},
 		"french":     {"french", "français"},
 		"german":     {"german", "deutsch"},
@@ -680,220 +89,461 @@ func ExtractLanguages(cvText string, requiredLanguages []string) []string {
 		"italian":    {"italian", "italiano"},
 		"japanese":   {"japanese", "日本語"},
 	}
-	
-	// Check required languages
-	for _, lang := range requiredLanguages {
-		langLower := strings.ToLower(lang)
-		if patterns, ok := languagePatterns[langLower]; ok {
-			for _, pattern := range patterns {
-				if strings.Contains(cvLower, pattern) {
-					foundLanguages = append(foundLanguages, lang)
-					break
-				}
-			}
-		} else if strings.Contains(cvLower, langLower) {
-			foundLanguages = append(foundLanguages, lang)
-		}
-	}
-	
-	return foundLanguages
-}
+)
 
-// MatchCV analyzes CV against criteria and returns match score
-func MatchCV(cvText string, criteria Criteria, jobTitle string) *MatchResult {
-	result := &MatchResult{
-		Skills:    []string{},
-		Languages: []string{},
-		Strengths: []string{},
-	}
-	
-	cvLower := strings.ToLower(cvText)
-	
-	// 1. Extract and match skills (40% weight)
-	if len(criteria.RequiredSkills) > 0 {
-		result.Skills = ExtractSkills(cvText, criteria.RequiredSkills)
-		result.SkillsMatch = (len(result.Skills) * 100) / len(criteria.RequiredSkills)
-		if result.SkillsMatch > 100 {
-			result.SkillsMatch = 100
-		}
-		
-		// Find missing skills
-		for _, skill := range criteria.RequiredSkills {
-			if !contains(result.Skills, skill) {
-				result.MissingSkills = append(result.MissingSkills, skill)
-			}
-		}
-	} else {
-		result.SkillsMatch = 100 // No skills required = full match
-	}
-	
-	// 2. Extract and match experience (30% weight)
-	result.Experience = ExtractExperience(cvText)
-	if criteria.MinExperience > 0 {
-		if result.Experience >= criteria.MinExperience {
-			result.ExperienceMatch = 100
-		} else if result.Experience > 0 {
-			result.ExperienceMatch = (result.Experience * 100) / criteria.MinExperience
-		} else {
-			result.ExperienceMatch = 0
-		}
-	} else {
-		result.ExperienceMatch = 100 // No experience requirement = full match
-	}
-	
-	// 3. Extract and match languages (20% weight)
-	if len(criteria.RequiredLanguages) > 0 {
-		result.Languages = ExtractLanguages(cvText, criteria.RequiredLanguages)
-		result.LanguageMatch = (len(result.Languages) * 100) / len(criteria.RequiredLanguages)
-		if result.LanguageMatch > 100 {
-			result.LanguageMatch = 100
-		}
-	} else {
-		result.LanguageMatch = 100 // No language requirement = full match
-	}
-	
-	// 4. Match job description (10% weight)
-	jobDescMatch := 0
-	if criteria.MatchJobDescription && criteria.JobDescription != "" {
-		jobDescLower := strings.ToLower(criteria.JobDescription)
-		jobWords := strings.Fields(jobDescLower)
-		matchedWords := 0
-		
-		for _, word := range jobWords {
-			if len(word) > 4 && strings.Contains(cvLower, word) {
-				matchedWords++
-			}
-		}
-		
-		if len(jobWords) > 0 {
-			jobDescMatch = (matchedWords * 100) / len(jobWords)
-			if jobDescMatch > 100 {
-				jobDescMatch = 100
-			}
-		}
-	} else {
-		jobDescMatch = 100 // Not required = full match
-	}
-	
-	// Calculate overall match score
-	result.MatchScore = (result.SkillsMatch*40 + result.ExperienceMatch*30 + result.LanguageMatch*20 + jobDescMatch*10) / 100
-	
-	// Generate summary and match reason
-	result.Summary = generateSummary(result, criteria)
-	result.MatchReason = generateMatchReason(result, criteria)
-	
-	// Identify strengths
-	result.Strengths = identifyStrengths(result, cvText)
-	
-	return result
-}
+// ExtractTextFromURL downloads a CV and extracts its plain text.
+func ExtractTextFromURL(cvURL string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-// MatchCVFromURL analyzes CV from URL against criteria
-func MatchCVFromURL(cvURL string, criteria Criteria, jobTitle string) (*MatchResult, error) {
-	// Extract text from CV
-	cvText, err := ExtractTextFromURL(cvURL)
+	data, contentType, err := download(ctx, cvURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract CV text: %w", err)
+		return "", err
 	}
-	
-	if len(cvText) < 50 {
-		return nil, fmt.Errorf("CV text too short or unreadable")
+	text, err := extractText(data, contentType, strings.ToLower(cvURL))
+	if err != nil {
+		return "", err
 	}
-	
-	log.Printf("Extracted %d characters from CV", len(cvText))
-	
-	// Match against criteria
-	result := MatchCV(cvText, criteria, jobTitle)
-	
-	return result, nil
+	if len(text) < minCVTextLength || !utf8.ValidString(text) {
+		return "", errors.New("CV text is too short or unreadable; scanned PDFs need OCR first")
+	}
+	return text, nil
 }
 
-// Helper functions
+func extractText(data []byte, contentType, name string) (string, error) {
+	switch {
+	case strings.Contains(contentType, "text/plain") || strings.HasSuffix(name, ".txt"):
+		return string(data), nil
+	case bytes.HasPrefix(data, []byte("%PDF")):
+		return extractPDFText(data), nil
+	case bytes.HasPrefix(data, []byte("PK\x03\x04")):
+		return extractDOCXText(data)
+	default:
+		return extractReadableText(data), nil
+	}
+}
 
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if strings.EqualFold(s, item) {
+// extractPDFText handles uncompressed text objects and streams; it is heuristic, not a full PDF parser.
+func extractPDFText(data []byte) string {
+	for _, extract := range []func([]byte) string{extractPDFTextObjects, extractPDFStreams, extractReadableText} {
+		if text := cleanPDFText(extract(data)); len(text) > 100 && looksLikeText(text) {
+			return text
+		}
+	}
+	return ""
+}
+
+func extractPDFTextObjects(data []byte) string {
+	var out strings.Builder
+	for rest := data; ; {
+		start := bytes.Index(rest, []byte("BT"))
+		if start == -1 {
+			break
+		}
+		end := bytes.Index(rest[start:], []byte("ET"))
+		if end == -1 {
+			break
+		}
+		for _, m := range pdfParenText.FindAllSubmatch(rest[start+2:start+end], -1) {
+			if s := string(m[1]); !isPDFStructureMarker(s) && utf8.ValidString(s) && looksLikeText(s) {
+				out.WriteString(s)
+				out.WriteByte(' ')
+			}
+		}
+		rest = rest[start+end+2:]
+	}
+	return out.String()
+}
+
+func extractPDFStreams(data []byte) string {
+	var out strings.Builder
+	for offset := 0; ; {
+		start := bytes.Index(data[offset:], []byte("stream"))
+		if start == -1 {
+			break
+		}
+		start += offset
+		end := bytes.Index(data[start:], []byte("endstream"))
+		if end == -1 {
+			break
+		}
+		end += start
+
+		header := string(data[max(0, start-200):start])
+		compressed := strings.Contains(header, "/FlateDecode") || strings.Contains(header, "/LZWDecode") || strings.Contains(header, "/DCTDecode")
+		if !compressed {
+			if text := cleanPDFText(extractReadableText(data[start+len("stream") : end])); len(text) > 10 {
+				out.WriteString(text)
+				out.WriteByte(' ')
+			}
+		}
+		offset = end + len("endstream")
+	}
+	return out.String()
+}
+
+func isPDFStructureMarker(s string) bool {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	for _, marker := range pdfStructureMarkers {
+		if strings.Contains(lower, marker) {
 			return true
 		}
+	}
+	return pdfObjectRef.MatchString(s) || pdfObjectHeader.MatchString(s)
+}
+
+func cleanPDFText(text string) string {
+	for _, pattern := range pdfArtifacts {
+		text = pattern.ReplaceAllString(text, " ")
+	}
+	return strings.TrimSpace(whitespaceRun.ReplaceAllString(text, " "))
+}
+
+// looksLikeText rejects binary noise: at least 30% letters and either a common word or enough length.
+func looksLikeText(text string) bool {
+	letters, visible := 0, 0
+	for _, r := range text {
+		if unicode.IsLetter(r) {
+			letters++
+		}
+		if !unicode.IsSpace(r) {
+			visible++
+		}
+	}
+	if visible == 0 || letters*100/visible < 30 {
+		return false
+	}
+	lower := strings.ToLower(text)
+	for _, word := range []string{"the", "and", "or", "is", "are", "was", "be", "have", "has"} {
+		if strings.Contains(lower, word) {
+			return true
+		}
+	}
+	return len(text) > 200 && letters > 50
+}
+
+// extractDOCXText reads word/document.xml from the DOCX zip and joins its text runs.
+func extractDOCXText(data []byte) (string, error) {
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return "", fmt.Errorf("invalid DOCX: %w", err)
+	}
+	idx := slices.IndexFunc(archive.File, func(f *zip.File) bool { return f.Name == "word/document.xml" })
+	if idx == -1 {
+		return "", errors.New("invalid DOCX: missing word/document.xml")
+	}
+	rc, err := archive.File[idx].Open()
+	if err != nil {
+		return "", err
+	}
+	defer rc.Close()
+
+	var out strings.Builder
+	decoder := xml.NewDecoder(io.LimitReader(rc, maxDownloadBytes))
+	inText := false
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("invalid DOCX XML: %w", err)
+		}
+		switch t := token.(type) {
+		case xml.StartElement:
+			inText = t.Name.Local == "t"
+		case xml.EndElement:
+			if t.Name.Local == "p" {
+				out.WriteByte('\n')
+			}
+			inText = false
+		case xml.CharData:
+			if inText {
+				out.Write(t)
+			}
+		}
+	}
+	return strings.TrimSpace(out.String()), nil
+}
+
+// extractReadableText keeps printable ASCII words longer than two characters.
+func extractReadableText(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	var text, word strings.Builder
+	valid := 0
+	flush := func() {
+		if word.Len() > 2 {
+			text.WriteString(word.String())
+			text.WriteByte(' ')
+		}
+		word.Reset()
+	}
+	for _, b := range data {
+		r := rune(b)
+		if b < 0x80 && (unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune(" -_.,", r)) {
+			word.WriteByte(b)
+			valid++
+		} else {
+			flush()
+		}
+	}
+	flush()
+
+	if valid*100/len(data) < 5 {
+		return ""
+	}
+	return strings.TrimSpace(text.String())
+}
+
+func ExtractExperience(cvText string) int {
+	lower := strings.ToLower(cvText)
+	years := 0
+	for _, pattern := range experiencePatterns {
+		for _, m := range pattern.FindAllStringSubmatch(lower, -1) {
+			if n, err := strconv.Atoi(m[1]); err == nil && n < 60 && n > years {
+				years = n
+			}
+		}
+	}
+	if years > 0 {
+		return years
+	}
+
+	// Fall back to the span between the first and last year mentioned.
+	dates := yearPattern.FindAllString(cvText, -1)
+	if len(dates) >= 2 {
+		first, _ := strconv.Atoi(dates[0])
+		last, _ := strconv.Atoi(dates[len(dates)-1])
+		if last > first {
+			return last - first
+		}
+	}
+	return 0
+}
+
+// containsWord matches whole words only, so "go" does not match inside "django".
+func containsWord(text, word string) bool {
+	if word == "" {
+		return false
+	}
+	for offset := 0; offset < len(text); {
+		idx := strings.Index(text[offset:], word)
+		if idx == -1 {
+			return false
+		}
+		start := offset + idx
+		end := start + len(word)
+		if isWordBoundary(text, start-1) && isWordBoundary(text, end) {
+			return true
+		}
+		offset = start + 1
 	}
 	return false
 }
 
-func generateSummary(result *MatchResult, criteria Criteria) string {
-	parts := []string{}
-	
-	if result.Experience > 0 {
-		parts = append(parts, fmt.Sprintf("%d years experience", result.Experience))
+func isWordBoundary(text string, i int) bool {
+	if i < 0 || i >= len(text) {
+		return true
 	}
-	
-	if len(result.Skills) > 0 {
-		parts = append(parts, fmt.Sprintf("%d/%d required skills", len(result.Skills), len(criteria.RequiredSkills)))
-	}
-	
-	if len(result.Languages) > 0 {
-		parts = append(parts, fmt.Sprintf("%d languages", len(result.Languages)))
-	}
-	
-	if len(parts) > 0 {
-		return strings.Join(parts, ", ")
-	}
-	
-	return "Candidate profile analyzed"
+	b := text[i]
+	return !(b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b >= 'A' && b <= 'Z')
 }
 
-func generateMatchReason(result *MatchResult, criteria Criteria) string {
-	reasons := []string{}
-	
-	if result.SkillsMatch >= 80 {
+// MatchedRequired returns the required skills present in a CV.
+func MatchedRequired(cvText string, required []string) []string {
+	found := ExtractSkills(cvText, required)
+	var matched []string
+	for _, skill := range required {
+		if containsFold(found, skill) {
+			matched = append(matched, skill)
+		}
+	}
+	return matched
+}
+
+// ExtractSkills matches required skills (with synonyms and title inference) plus common skills.
+func ExtractSkills(cvText string, requiredSkills []string) []string {
+	lower := strings.ToLower(cvText)
+	inferred := InferSkillsFromJobTitle(extractJobTitle(lower))
+	var found []string
+
+	for _, skill := range requiredSkills {
+		normalized := NormalizeSkill(skill)
+		matched := containsWord(lower, normalized) || containsWord(lower, strings.ToLower(skill))
+		for _, synonym := range GetSkillSynonyms(skill) {
+			if matched {
+				break
+			}
+			matched = containsWord(lower, NormalizeSkill(synonym)) || containsWord(lower, strings.ToLower(synonym))
+		}
+		if !matched {
+			if words := strings.Fields(normalized); len(words) > 0 && len(words[0]) > 3 {
+				matched = containsWord(lower, words[0])
+			}
+		}
+		for _, skillFromTitle := range inferred {
+			if matched {
+				break
+			}
+			s := strings.ToLower(skillFromTitle)
+			matched = containsWord(s, normalized) || containsWord(normalized, s)
+		}
+		if matched {
+			found = append(found, skill)
+		}
+	}
+
+	for _, skill := range append(slices.Clone(commonSkills), inferred...) {
+		if containsWord(lower, strings.ToLower(skill)) && !containsFold(found, skill) {
+			found = append(found, skill)
+		}
+	}
+	return found
+}
+
+func extractJobTitle(lowerCV string) string {
+	for _, pattern := range titlePattern {
+		if m := pattern.FindStringSubmatch(lowerCV); len(m) > 1 {
+			if title := strings.TrimSpace(m[1]); len(title) > 3 && len(title) < 50 {
+				return title
+			}
+		}
+	}
+	return ""
+}
+
+func ExtractLanguages(cvText string, requiredLanguages []string) []string {
+	lower := strings.ToLower(cvText)
+	var found []string
+	for _, lang := range requiredLanguages {
+		key := strings.ToLower(lang)
+		aliases, ok := languageAliases[key]
+		if !ok {
+			aliases = []string{key}
+		}
+		if slices.ContainsFunc(aliases, func(a string) bool { return strings.Contains(lower, a) }) {
+			found = append(found, lang)
+		}
+	}
+	return found
+}
+
+// MatchCV scores a CV: skills 40%, experience 30%, languages 20%, job description 10%.
+func MatchCV(cvText string, criteria Criteria) *MatchResult {
+	lower := strings.ToLower(cvText)
+	result := &MatchResult{Skills: []string{}, Languages: []string{}, MissingSkills: []string{}}
+
+	result.SkillsMatch = 100
+	if n := len(criteria.RequiredSkills); n > 0 {
+		result.Skills = ExtractSkills(cvText, criteria.RequiredSkills)
+		matched := 0
+		for _, skill := range criteria.RequiredSkills {
+			if containsFold(result.Skills, skill) {
+				matched++
+			} else {
+				result.MissingSkills = append(result.MissingSkills, skill)
+			}
+		}
+		result.SkillsMatch = matched * 100 / n
+	}
+
+	result.Experience = ExtractExperience(cvText)
+	result.ExperienceMatch = 100
+	if criteria.MinExperience > 0 {
+		result.ExperienceMatch = min(100, result.Experience*100/criteria.MinExperience)
+	}
+
+	result.LanguageMatch = 100
+	if n := len(criteria.RequiredLanguages); n > 0 {
+		result.Languages = ExtractLanguages(cvText, criteria.RequiredLanguages)
+		result.LanguageMatch = len(result.Languages) * 100 / n
+	}
+
+	descMatch := 100
+	if criteria.MatchJobDescription && criteria.JobDescription != "" {
+		words := strings.Fields(strings.ToLower(criteria.JobDescription))
+		hits := 0
+		for _, w := range words {
+			if len(w) > 4 && strings.Contains(lower, w) {
+				hits++
+			}
+		}
+		descMatch = hits * 100 / len(words)
+	}
+
+	result.MatchScore = (result.SkillsMatch*40 + result.ExperienceMatch*30 + result.LanguageMatch*20 + descMatch*10) / 100
+	result.Summary = summarize(result, criteria)
+	result.MatchReason = matchReason(result, criteria)
+	result.Strengths = strengths(result, lower)
+	return result
+}
+
+func containsFold(list []string, item string) bool {
+	return slices.ContainsFunc(list, func(s string) bool { return strings.EqualFold(s, item) })
+}
+
+func summarize(r *MatchResult, c Criteria) string {
+	var parts []string
+	if r.Experience > 0 {
+		parts = append(parts, fmt.Sprintf("%d years experience", r.Experience))
+	}
+	if len(c.RequiredSkills) > 0 {
+		parts = append(parts, fmt.Sprintf("%d/%d required skills", len(c.RequiredSkills)-len(r.MissingSkills), len(c.RequiredSkills)))
+	}
+	if len(r.Languages) > 0 {
+		parts = append(parts, fmt.Sprintf("%d languages", len(r.Languages)))
+	}
+	if len(parts) == 0 {
+		return "Candidate profile analyzed"
+	}
+	return strings.Join(parts, ", ")
+}
+
+func matchReason(r *MatchResult, c Criteria) string {
+	var reasons []string
+	switch {
+	case r.SkillsMatch >= 80:
 		reasons = append(reasons, "Strong skills match")
-	} else if result.SkillsMatch >= 50 {
+	case r.SkillsMatch >= 50:
 		reasons = append(reasons, "Partial skills match")
-	} else if len(criteria.RequiredSkills) > 0 {
+	case len(c.RequiredSkills) > 0:
 		reasons = append(reasons, "Missing key skills")
 	}
-	
-	if result.ExperienceMatch >= 100 {
+	switch {
+	case r.ExperienceMatch >= 100:
 		reasons = append(reasons, "Meets experience requirement")
-	} else if result.ExperienceMatch > 0 {
+	case r.ExperienceMatch > 0:
 		reasons = append(reasons, "Below experience requirement")
 	}
-	
-	if result.LanguageMatch >= 100 {
+	if r.LanguageMatch >= 100 {
 		reasons = append(reasons, "Meets language requirements")
-	} else if len(criteria.RequiredLanguages) > 0 {
+	} else if len(c.RequiredLanguages) > 0 {
 		reasons = append(reasons, "Missing language requirements")
 	}
-	
-	if len(reasons) > 0 {
-		return strings.Join(reasons, ". ")
+	if len(reasons) == 0 {
+		return "Basic profile match"
 	}
-	
-	return "Basic profile match"
+	return strings.Join(reasons, ". ")
 }
 
-func identifyStrengths(result *MatchResult, cvText string) []string {
-	strengths := []string{}
-	
-	if result.Experience >= 5 {
-		strengths = append(strengths, "Extensive experience")
+func strengths(r *MatchResult, lowerCV string) []string {
+	out := []string{}
+	if r.Experience >= 5 {
+		out = append(out, "Extensive experience")
 	}
-	
-	if len(result.Skills) >= 5 {
-		strengths = append(strengths, "Diverse skill set")
+	if len(r.Skills) >= 5 {
+		out = append(out, "Diverse skill set")
 	}
-	
-	if result.SkillsMatch >= 80 {
-		strengths = append(strengths, "Strong technical match")
+	if r.SkillsMatch >= 80 {
+		out = append(out, "Strong technical match")
 	}
-	
-	if strings.Contains(strings.ToLower(cvText), "degree") || strings.Contains(strings.ToLower(cvText), "bachelor") || strings.Contains(strings.ToLower(cvText), "master") {
-		strengths = append(strengths, "Educational background")
+	if strings.Contains(lowerCV, "degree") || strings.Contains(lowerCV, "bachelor") || strings.Contains(lowerCV, "master") {
+		out = append(out, "Educational background")
 	}
-	
-	if strings.Contains(strings.ToLower(cvText), "certification") || strings.Contains(strings.ToLower(cvText), "certified") {
-		strengths = append(strengths, "Professional certifications")
+	if strings.Contains(lowerCV, "certification") || strings.Contains(lowerCV, "certified") {
+		out = append(out, "Professional certifications")
 	}
-	
-	return strengths
+	return out
 }
-

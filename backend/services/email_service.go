@@ -3,313 +3,137 @@ package services
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"html"
 	"io"
-	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
+	"time"
+
+	"ats-backend/config"
 )
 
-// EmailProvider represents the email service provider
-type EmailProvider string
+var mailClient = &http.Client{Timeout: 15 * time.Second}
 
-const (
-	ProviderResend  EmailProvider = "resend"
-	ProviderSendGrid EmailProvider = "sendgrid"
-)
-
-// isResendVerifiedDomain checks if email uses Resend's test domain
-func isResendVerifiedDomain(email string) bool {
-	return strings.HasSuffix(email, "@resend.dev")
+// SendEmail delivers through SendGrid (default) or Resend when EMAIL_PROVIDER=resend.
+func SendEmail(to, subject, htmlBody string) error {
+	if strings.EqualFold(os.Getenv("EMAIL_PROVIDER"), "resend") {
+		return sendViaResend(to, subject, htmlBody)
+	}
+	return sendViaSendGrid(to, subject, htmlBody)
 }
 
-type EmailRequest struct {
-	From    string   `json:"from"`
-	To      []string `json:"to"`
-	Subject string   `json:"subject"`
-	HTML    string   `json:"html"`
-}
-
-// getEmailProvider returns the configured email provider (default: sendgrid)
-func getEmailProvider() EmailProvider {
-	provider := strings.ToLower(os.Getenv("EMAIL_PROVIDER"))
-	if provider == string(ProviderResend) {
-		return ProviderResend
-	}
-	// Default to SendGrid (better for testing - no restrictions)
-	return ProviderSendGrid
-}
-
-// sendEmailViaSendGrid sends email using SendGrid API
-func sendEmailViaSendGrid(to, subject, htmlBody string) error {
-	apiKey := os.Getenv("SENDGRID_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("SENDGRID_API_KEY not set")
-	}
-
-	fromEmail := os.Getenv("SENDGRID_FROM_EMAIL")
-	if fromEmail == "" {
-		// SendGrid requires a verified sender email
-		// User must verify a single sender email in SendGrid dashboard
-		// This can be a personal Gmail/Outlook/etc. - no domain needed!
-		return fmt.Errorf("SENDGRID_FROM_EMAIL must be set to a verified sender email. Verify a single sender in SendGrid dashboard (Settings → Sender Authentication → Verify a Single Sender)")
-	}
-
-	log.Printf("Attempting to send email via SendGrid to %s from %s", to, fromEmail)
-
-	// SendGrid API format
-	type SendGridContent struct {
-		Type  string `json:"type"`
-		Value string `json:"value"`
-	}
-	type SendGridPersonalization struct {
-		To []map[string]string `json:"to"`
-	}
-	type SendGridEmail struct {
-		Personalizations []SendGridPersonalization `json:"personalizations"`
-		From             map[string]string          `json:"from"`
-		Subject          string                     `json:"subject"`
-		Content          []SendGridContent          `json:"content"`
-	}
-
-	emailReq := SendGridEmail{
-		Personalizations: []SendGridPersonalization{
-			{
-				To: []map[string]string{{"email": to}},
-			},
-		},
-		From: map[string]string{
-			"email": fromEmail,
-		},
-		Subject: subject,
-		Content: []SendGridContent{
-			{
-				Type:  "text/html",
-				Value: htmlBody,
-			},
-		},
-	}
-
-	jsonData, err := json.Marshal(emailReq)
-	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequest("POST", "https://api.sendgrid.com/v3/mail/send", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("SendGrid API error: %v", err)
-		return err
-	}
-	defer resp.Body.Close()
-
-	// Read response body for debugging
-	body, _ := io.ReadAll(resp.Body)
-	
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		log.Printf("SendGrid email sending failed: Status %d, Response: %s", resp.StatusCode, string(body))
-		return fmt.Errorf("email sending failed: %d - %s", resp.StatusCode, string(body))
-	}
-
-	log.Printf("Email sent successfully via SendGrid to %s", to)
-	return nil
-}
-
-// sendEmailViaResend sends email using Resend API
-func sendEmailViaResend(to, subject, htmlBody string) error {
+func sendViaResend(to, subject, htmlBody string) error {
 	apiKey := os.Getenv("RESEND_API_KEY")
 	if apiKey == "" {
-		return fmt.Errorf("RESEND_API_KEY not set")
+		return errors.New("RESEND_API_KEY not set")
+	}
+	// onboarding@resend.dev works without a verified domain, but only delivers to your own address.
+	from := config.GetEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev")
+
+	payload := map[string]any{"from": from, "to": []string{to}, "subject": subject, "html": htmlBody}
+	return postJSON("https://api.resend.com/emails", apiKey, payload)
+}
+
+func sendViaSendGrid(to, subject, htmlBody string) error {
+	apiKey := os.Getenv("SENDGRID_API_KEY")
+	from := os.Getenv("SENDGRID_FROM_EMAIL")
+	if apiKey == "" || from == "" {
+		return errors.New("SENDGRID_API_KEY and SENDGRID_FROM_EMAIL must be set")
 	}
 
-	fromEmail := os.Getenv("RESEND_FROM_EMAIL")
-	// Resend requires verified domains. For testing, use their default domain
-	// If using a custom email, it must be verified in Resend dashboard
-	if fromEmail == "" || !isResendVerifiedDomain(fromEmail) {
-		// Use Resend's default domain for testing (no verification needed)
-		fromEmail = "onboarding@resend.dev"
-		log.Printf("WARNING: Using Resend test domain. Set RESEND_FROM_EMAIL to a verified domain for production")
+	payload := map[string]any{
+		"personalizations": []map[string]any{{"to": []map[string]string{{"email": to}}}},
+		"from":             map[string]string{"email": from},
+		"subject":          subject,
+		"content":          []map[string]string{{"type": "text/html", "value": htmlBody}},
 	}
-	
-	log.Printf("Attempting to send email via Resend to %s from %s", to, fromEmail)
+	return postJSON("https://api.sendgrid.com/v3/mail/send", apiKey, payload)
+}
 
-	emailReq := EmailRequest{
-		From:    fromEmail,
-		To:      []string{to},
-		Subject: subject,
-		HTML:    htmlBody,
-	}
-
-	jsonData, err := json.Marshal(emailReq)
+func postJSON(endpoint, apiKey string, payload any) error {
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-
-	req, err := http.NewRequest("POST", "https://api.resend.com/emails", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := mailClient.Do(req)
 	if err != nil {
-		log.Printf("Resend API error: %v", err)
 		return err
 	}
 	defer resp.Body.Close()
 
-	// Read response body for debugging
-	body, _ := io.ReadAll(resp.Body)
-	
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		log.Printf("Resend email sending failed: Status %d, Response: %s", resp.StatusCode, string(body))
-		return fmt.Errorf("email sending failed: %d - %s", resp.StatusCode, string(body))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("email provider returned %d: %s", resp.StatusCode, detail)
 	}
-
-	log.Printf("Email sent successfully via Resend to %s", to)
 	return nil
 }
 
-// sendEmail sends email using the configured provider
-func sendEmail(to, subject, htmlBody string) error {
-	provider := getEmailProvider()
-	
-	switch provider {
-	case ProviderResend:
-		return sendEmailViaResend(to, subject, htmlBody)
-	case ProviderSendGrid:
-		return sendEmailViaSendGrid(to, subject, htmlBody)
-	default:
-		return fmt.Errorf("unknown email provider: %s", provider)
-	}
+// renderEmail escapes every caller-supplied value; bodyHTML must already be safe.
+func renderEmail(greeting, color, bodyHTML, ctaLabel, ctaURL string) string {
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+  <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+    <h2 style="color: %s;">%s</h2>
+    %s
+    <p style="text-align: center; margin: 20px 0;">
+      <a href="%s" style="background-color: %s; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">%s</a>
+    </p>
+    <p>Best regards,<br>The Hiring Team</p>
+  </div>
+</body></html>`,
+		color, html.EscapeString(greeting), bodyHTML, html.EscapeString(ctaURL), color, html.EscapeString(ctaLabel))
+}
+
+func statusURL() string {
+	return config.FrontendURL() + "/application-status"
 }
 
 func SendConfirmationEmail(to, name, jobTitle, applicationID string) error {
-	// Get frontend URL from environment or use default
-	frontendURL := os.Getenv("FRONTEND_URL")
-	if frontendURL == "" {
-		frontendURL = "http://localhost:3000"
-	}
-	
-	// Create direct link to application status with pre-filled email and application ID
-	statusLink := fmt.Sprintf("%s/application-status?email=%s&applicationId=%s", frontendURL, to, applicationID)
-	
-	subject := "Application Received - " + jobTitle
-	html := fmt.Sprintf(`
-		<!DOCTYPE html>
-		<html>
-		<head>
-			<meta charset="UTF-8">
-		</head>
-		<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-			<div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-				<h2 style="color: #2563eb;">Hello %s,</h2>
-				<p>Thank you for applying to the <strong>%s</strong> position.</p>
-				<p>We have received your application and will review it shortly.</p>
-				<p>You can check your application status anytime using the link below:</p>
-				<p style="text-align: center; margin: 20px 0;">
-					<a href="%s" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">Check Application Status</a>
-				</p>
-				<p style="font-size: 12px; color: #666; text-align: center;">
-					Or copy this link: <br>
-					<a href="%s" style="color: #2563eb; word-break: break-all;">%s</a>
-				</p>
-				<p style="font-size: 12px; color: #666; margin-top: 20px;">
-					<strong>Application ID:</strong> %s<br>
-					You'll need this along with your email (%s) to check your status in the future.
-				</p>
-				<p>You will hear from us soon!</p>
-				<br>
-				<p>Best regards,<br>The Hiring Team</p>
-			</div>
-		</body>
-		</html>
-	`, name, jobTitle, statusLink, statusLink, statusLink, applicationID, to)
+	link := statusURL() + "?" + url.Values{"email": {to}, "applicationId": {applicationID}}.Encode()
+	body := fmt.Sprintf(`<p>Thank you for applying to the <strong>%s</strong> position.</p>
+    <p>We have received your application and will review it shortly. You can check its status anytime.</p>
+    <p style="font-size: 12px; color: #666;"><strong>Application ID:</strong> %s<br>
+    You'll need this along with your email to check your status later.</p>`,
+		html.EscapeString(jobTitle), html.EscapeString(applicationID))
 
-	return sendEmail(to, subject, html)
+	return SendEmail(to, "Application Received - "+jobTitle,
+		renderEmail("Hello "+name+",", "#2563eb", body, "Check Application Status", link))
 }
 
 func SendShortlistEmail(to, name, jobTitle string) error {
-	// Get frontend URL from environment or use default
-	frontendURL := os.Getenv("FRONTEND_URL")
-	if frontendURL == "" {
-		frontendURL = "http://localhost:3000"
-	}
-	
-	subject := "Congratulations! You've been Shortlisted"
-	html := fmt.Sprintf(`
-		<!DOCTYPE html>
-		<html>
-		<head>
-			<meta charset="UTF-8">
-		</head>
-		<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-			<div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-				<h2 style="color: #10b981;">Congratulations %s!</h2>
-				<p>Great news! You have been <strong style="color: #10b981;">shortlisted</strong> for the <strong>%s</strong> position.</p>
-				<p>Our team will be in touch with you soon regarding the next steps in the hiring process.</p>
-				<p>You can check your application status anytime:</p>
-				<p style="text-align: center; margin: 20px 0;">
-					<a href="%s/application-status" style="background-color: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">View Application Status</a>
-				</p>
-				<br>
-				<p>Best regards,<br>The Hiring Team</p>
-			</div>
-		</body>
-		</html>
-	`, name, jobTitle, frontendURL)
+	body := fmt.Sprintf(`<p>Great news! You have been <strong style="color: #10b981;">shortlisted</strong> for the <strong>%s</strong> position.</p>
+    <p>Our team will be in touch soon about the next steps.</p>`, html.EscapeString(jobTitle))
 
-	return sendEmail(to, subject, html)
+	return SendEmail(to, "Congratulations! You've been Shortlisted",
+		renderEmail("Congratulations "+name+"!", "#10b981", body, "View Application Status", statusURL()))
 }
 
 func SendRejectionEmail(to, name, jobTitle string) error {
-	// Get frontend URL from environment or use default
-	frontendURL := os.Getenv("FRONTEND_URL")
-	if frontendURL == "" {
-		frontendURL = "http://localhost:3000"
-	}
-	
-	subject := "Application Update - " + jobTitle
-	html := fmt.Sprintf(`
-		<!DOCTYPE html>
-		<html>
-		<head>
-			<meta charset="UTF-8">
-		</head>
-		<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-			<div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-				<h2 style="color: #2563eb;">Hello %s,</h2>
-				<p>Thank you for your interest in the <strong>%s</strong> position.</p>
-				<p>After careful consideration, we have decided to move forward with other candidates at this time.</p>
-				<p>We appreciate the time you took to apply and encourage you to apply for future opportunities.</p>
-				<p>You can check your application status anytime:</p>
-				<p style="text-align: center; margin: 20px 0;">
-					<a href="%s/application-status" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">View Application Status</a>
-				</p>
-				<br>
-				<p>Best regards,<br>The Hiring Team</p>
-			</div>
-		</body>
-		</html>
-	`, name, jobTitle, frontendURL)
+	body := fmt.Sprintf(`<p>Thank you for your interest in the <strong>%s</strong> position.</p>
+    <p>After careful consideration, we have decided to move forward with other candidates at this time.
+    We encourage you to apply for future opportunities.</p>`, html.EscapeString(jobTitle))
 
-	return sendEmail(to, subject, html)
+	return SendEmail(to, "Application Update - "+jobTitle,
+		renderEmail("Hello "+name+",", "#2563eb", body, "View Application Status", statusURL()))
 }
 
-// SendCustomEmail sends a custom email with provided subject and HTML body
-func SendCustomEmail(to, subject, html string) error {
-	return sendEmail(to, subject, html)
-}
+func SendNewMessageEmail(to, name, jobTitle, message string) error {
+	body := fmt.Sprintf(`<p>You have a new message about your application for <strong>%s</strong>.</p>
+    <div style="background-color: #f3f4f6; padding: 15px; border-radius: 5px; margin: 20px 0; white-space: pre-wrap;">%s</div>
+    <p>You can reply from your application status portal.</p>`, html.EscapeString(jobTitle), html.EscapeString(message))
 
+	return SendEmail(to, "New Message About Your Application - "+jobTitle,
+		renderEmail("Hello "+name+",", "#2563eb", body, "View Application Status", statusURL()))
+}

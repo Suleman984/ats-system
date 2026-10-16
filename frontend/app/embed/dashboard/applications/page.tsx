@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { applicationAPI, jobAPI, Application, Job } from "@/lib/api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { applicationAPI, jobAPI, Application, Job, errorMessage } from "@/lib/api";
 import { toast } from "@/components/Toast";
 
 export default function ApplicationsPage() {
@@ -15,59 +15,42 @@ export default function ApplicationsPage() {
   const [isFiltering, setIsFiltering] = useState(false);
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
 
-  const fetchData = useCallback(
-    async (skipFilters = false) => {
-      try {
-        const params: {
-          job_id?: string;
-          status?: string;
-          date_from?: string;
-          date_to?: string;
-        } = {};
+  const fetchData = useCallback(async () => {
+    const params = Object.fromEntries(
+      Object.entries({
+        job_id: selectedJob,
+        status: selectedStatus,
+        date_from: dateFrom,
+        date_to: dateTo,
+      }).filter(([, value]) => value)
+    );
+    try {
+      const { data } = await applicationAPI.getAll(params);
+      setApplications(data.applications);
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to fetch applications"));
+    } finally {
+      setLoading(false);
+      setIsFiltering(false);
+    }
+  }, [selectedJob, selectedStatus, dateFrom, dateTo]);
 
-        if (!skipFilters) {
-          if (selectedJob) params.job_id = selectedJob;
-          if (selectedStatus) params.status = selectedStatus;
-          if (dateFrom) params.date_from = dateFrom;
-          if (dateTo) params.date_to = dateTo;
-        }
-
-        console.log("Fetching applications with params:", params);
-
-        const [appsRes, jobsRes] = await Promise.all([
-          applicationAPI.getAll(params),
-          jobAPI.getAll(),
-        ]);
-        setApplications(appsRes.data.applications);
-        setJobs(jobsRes.data.jobs);
-        console.log("Fetched applications:", appsRes.data.applications.length);
-      } catch (error) {
-        console.error("Failed to fetch data:", error);
-      } finally {
-        setLoading(false);
-        setIsFiltering(false);
-      }
-    },
-    [selectedJob, selectedStatus, dateFrom, dateTo]
-  );
-
-  // Initial load
   useEffect(() => {
-    fetchData(true);
+    jobAPI
+      .getAll()
+      .then(({ data }) => setJobs(data.jobs))
+      .catch((error) => toast.error(errorMessage(error, "Failed to fetch jobs")));
   }, []);
 
-  // Filter changes (debounced to avoid too many requests)
+  // Filter changes refetch after a 300ms debounce; the first load runs immediately.
+  const isFirstLoad = useRef(true);
   useEffect(() => {
-    // Skip if still loading initial data
-    if (loading) return;
-
-    setIsFiltering(true);
-    const timeoutId = setTimeout(() => {
-      fetchData(false);
-    }, 300); // Debounce for 300ms
-
+    const delay = isFirstLoad.current ? 0 : 300;
+    if (!isFirstLoad.current) setIsFiltering(true);
+    isFirstLoad.current = false;
+    const timeoutId = setTimeout(fetchData, delay);
     return () => clearTimeout(timeoutId);
-  }, [selectedJob, selectedStatus, dateFrom, dateTo, loading, fetchData]);
+  }, [fetchData]);
 
   const handleShortlist = async (id: string) => {
     if (!window.confirm("Shortlist this candidate?")) return;
@@ -76,7 +59,7 @@ export default function ApplicationsPage() {
       toast.success("Candidate shortlisted! Email sent.");
       fetchData();
     } catch (error) {
-      toast.error("Failed to shortlist candidate");
+      toast.error(errorMessage(error, "Failed to shortlist candidate"));
     }
   };
 
@@ -87,7 +70,7 @@ export default function ApplicationsPage() {
       toast.success("Candidate rejected. Email sent.");
       fetchData();
     } catch (error) {
-      toast.error("Failed to reject candidate");
+      toast.error(errorMessage(error, "Failed to reject candidate"));
     }
   };
 
@@ -336,27 +319,22 @@ export default function ApplicationsPage() {
                             <>
                               {/* Backdrop to close on outside click */}
                               <div
-                                className="fixed inset-0 z-[100]"
+                                className="fixed inset-0 z-100"
                                 onClick={() => setOpenDropdown(null)}
                               ></div>
                               {/* Dropdown menu */}
-                              <div className="absolute right-0 top-full mt-1 w-36 bg-white rounded-md shadow-2xl z-[200] border border-gray-300 py-1.5">
+                              <div className="absolute right-0 top-full mt-1 w-36 bg-white rounded-md shadow-2xl z-200 border border-gray-300 py-1.5">
                                 <a
                                   href={app.resume_url}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   onClick={async () => {
                                     setOpenDropdown(null);
-                                    // Track CV view
                                     try {
                                       await applicationAPI.trackCVView(app.id);
-                                      // Refresh applications to update status
                                       fetchData();
                                     } catch (error) {
-                                      console.error(
-                                        "Failed to track CV view:",
-                                        error
-                                      );
+                                      toast.error(errorMessage(error, "Failed to track CV view"));
                                     }
                                   }}
                                   className="block px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 transition-colors"

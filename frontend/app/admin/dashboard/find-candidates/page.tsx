@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   candidateSearchAPI,
-  CandidateSearchResult,
   applicationAPI,
+  errorMessage,
+  type CandidateDetails,
+  type CandidateSearchRequest,
+  type CandidateSearchResult,
 } from "@/lib/api";
 import { toast } from "@/components/Toast";
 
@@ -27,13 +30,12 @@ export default function FindCandidatesPage() {
   });
   const [totalCandidates, setTotalCandidates] = useState(0);
   const [showDetails, setShowDetails] = useState<string | null>(null);
-  const [candidateDetails, setCandidateDetails] = useState<any>(null);
+  const [candidateDetails, setCandidateDetails] = useState<CandidateDetails | null>(null);
 
   const handleSearch = async () => {
     setLoading(true);
     try {
-      // Build search request
-      const request: any = {
+      const request: CandidateSearchRequest = {
         limit: searchCriteria.limit || 50,
       };
 
@@ -83,8 +85,7 @@ export default function FindCandidatesPage() {
       setSearchResults(response.data.candidates || []);
       setTotalCandidates(response.data.total || 0);
     } catch (error) {
-      console.error("Failed to search candidates:", error);
-      toast.error("Failed to search candidates. Please try again.");
+      toast.error(errorMessage(error, "Failed to search candidates. Please try again."));
     } finally {
       setLoading(false);
     }
@@ -96,8 +97,7 @@ export default function FindCandidatesPage() {
       setCandidateDetails(response.data);
       setShowDetails(candidateId);
     } catch (error) {
-      console.error("Failed to fetch candidate details:", error);
-      toast.error("Failed to load candidate details.");
+      toast.error(errorMessage(error, "Failed to load candidate details."));
     }
   };
 
@@ -384,14 +384,13 @@ export default function FindCandidatesPage() {
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={async () => {
-                          // Track CV view
                           try {
                             await applicationAPI.trackCVView(
                               result.application.id
                             );
                             toast.success("CV view tracked");
                           } catch (error) {
-                            console.error("Failed to track CV view:", error);
+                            toast.error(errorMessage(error, "Failed to track CV view"));
                           }
                         }}
                         className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 text-center"

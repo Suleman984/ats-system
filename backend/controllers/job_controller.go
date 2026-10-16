@@ -1,367 +1,226 @@
 package controllers
 
 import (
-	"ats-backend/config"
-	"ats-backend/models"
-	"ats-backend/services"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"ats-backend/config"
+	"ats-backend/models"
+	"ats-backend/services"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
-// Helper function to get company_id from context
-func getCompanyID(c *gin.Context) (string, error) {
-	companyIDVal, exists := c.Get("company_id")
-	if !exists {
-		return "", gin.Error{Err: nil, Type: gin.ErrorTypePublic, Meta: "Company ID not found in token"}
-	}
-	companyID, ok := companyIDVal.(string)
-	if !ok || companyID == "" {
-		return "", gin.Error{Err: nil, Type: gin.ErrorTypePublic, Meta: "Invalid company ID"}
-	}
-	return companyID, nil
+// jobRequest uses pointers so updates only touch fields the client sent.
+type jobRequest struct {
+	Title             *string `json:"title" binding:"omitempty,max=255"`
+	Description       *string `json:"description"`
+	Requirements      *string `json:"requirements"`
+	Location          *string `json:"location" binding:"omitempty,max=255"`
+	JobType           *string `json:"job_type" binding:"omitempty,max=50"`
+	SalaryRange       *string `json:"salary_range" binding:"omitempty,max=100"`
+	Deadline          *string `json:"deadline"`
+	Status            *string `json:"status" binding:"omitempty,oneof=open closed archived"`
+	AutoShortlist     *bool   `json:"auto_shortlist"`
+	ShortlistCriteria *string `json:"shortlist_criteria"`
 }
 
-// CreateJob creates a new job posting
+func (r *jobRequest) apply(job *models.Job) error {
+	set := func(dst *string, src *string) {
+		if src != nil && *src != "" {
+			*dst = *src
+		}
+	}
+	set(&job.Title, r.Title)
+	set(&job.Description, r.Description)
+	set(&job.Requirements, r.Requirements)
+	set(&job.Location, r.Location)
+	set(&job.JobType, r.JobType)
+	set(&job.SalaryRange, r.SalaryRange)
+	set(&job.Status, r.Status)
+
+	if r.Deadline != nil && *r.Deadline != "" {
+		deadline, err := models.ParseDateOnly(strings.TrimSpace(*r.Deadline))
+		if err != nil {
+			return err
+		}
+		job.Deadline = deadline
+	}
+	if r.AutoShortlist != nil {
+		job.AutoShortlist = *r.AutoShortlist
+	}
+	if r.ShortlistCriteria != nil {
+		job.ShortlistCriteria = nil
+		if *r.ShortlistCriteria != "" {
+			job.ShortlistCriteria = r.ShortlistCriteria
+		}
+	}
+	return nil
+}
+
 func CreateJob(c *gin.Context) {
-	var jobRequest struct {
-		Title            string `json:"title" binding:"required"`
-		Description      string `json:"description" binding:"required"`
-		Requirements     string `json:"requirements"`
-		Location         string `json:"location"`
-		JobType          string `json:"job_type"`
-		SalaryRange      string `json:"salary_range"`
-		Deadline         string `json:"deadline" binding:"required"`
-		Status           string `json:"status"`
-		AutoShortlist    bool   `json:"auto_shortlist"`
-		ShortlistCriteria string `json:"shortlist_criteria"`
+	var req jobRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		badRequest(c, err)
+		return
 	}
-
-	if err := c.ShouldBindJSON(&jobRequest); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if req.Title == nil || *req.Title == "" || req.Description == nil || *req.Description == "" || req.Deadline == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "title, description and deadline are required"})
 		return
 	}
 
-	// Get company ID from JWT token (set by auth middleware)
-	companyIDVal, exists := c.Get("company_id")
-	if !exists {
-		log.Printf("CreateJob: ERROR - company_id not found in context")
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+	job := models.Job{CompanyID: companyID(c), Status: "open", AutoShortlist: true}
+	if err := req.apply(&job); err != nil {
+		badRequest(c, err)
 		return
 	}
-	
-	companyIDStr, ok := companyIDVal.(string)
-	if !ok || companyIDStr == "" {
-		log.Printf("CreateJob: ERROR - company_id is invalid, type: %T, value: '%v'", companyIDVal, companyIDVal)
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Company ID is invalid",
-			"details": "Your authentication token does not contain a valid company ID. Please log out and log in again.",
-		})
-		return
-	}
-	
-	log.Printf("CreateJob: Extracted company_id: '%s'", companyIDStr)
-	companyID, err := uuid.Parse(companyIDStr)
-	if err != nil {
-		log.Printf("CreateJob: ERROR - Failed to parse company_id '%s': %v", companyIDStr, err)
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid company ID format",
-			"details": "The company ID in your token is not in a valid format.",
-		})
-		return
-	}
-
-	// Parse deadline date string (format: "YYYY-MM-DD")
-	deadlineStr := strings.TrimSpace(jobRequest.Deadline)
-	deadlineTime, err := time.Parse("2006-01-02", deadlineStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":   "Invalid deadline format. Use YYYY-MM-DD",
-			"details": err.Error(),
-			"received": deadlineStr,
-		})
-		return
-	}
-	
-	// Create DateOnly type
-	deadline := models.DateOnly{
-		Time: time.Date(deadlineTime.Year(), deadlineTime.Month(), deadlineTime.Day(), 0, 0, 0, 0, time.UTC),
-	}
-
-	// Create job model
-	job := models.Job{
-		CompanyID:        companyID,
-		Title:            jobRequest.Title,
-		Description:      jobRequest.Description,
-		Requirements:     jobRequest.Requirements,
-		Location:         jobRequest.Location,
-		JobType:          jobRequest.JobType,
-		SalaryRange:      jobRequest.SalaryRange,
-		Deadline:         deadline,
-		Status:           jobRequest.Status,
-		AutoShortlist:    jobRequest.AutoShortlist,
-		CreatedAt:        time.Now(),
-		UpdatedAt:        time.Now(),
-	}
-
-	if job.Status == "" {
-		job.Status = "open"
-	}
-	if !job.AutoShortlist {
-		job.AutoShortlist = true
-	}
-	
-	// Handle shortlist_criteria - only set if not empty, otherwise leave as NULL
-	if jobRequest.ShortlistCriteria != "" {
-		job.ShortlistCriteria = &jobRequest.ShortlistCriteria
-	}
-
-	// Save to database
 	if err := config.DB.Create(&job).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "Failed to create job",
-			"details": err.Error(),
-		})
+		serverError(c, "Failed to create job")
 		return
 	}
 
-	// Get admin ID from context
-	adminIDVal, _ := c.Get("admin_id")
-	adminIDStr, _ := adminIDVal.(string)
-	adminID, _ := uuid.Parse(adminIDStr)
-
-	// Log job creation
-	services.LogJobCreated(companyID, adminID, job.ID, job.Title)
-
-	c.JSON(http.StatusCreated, gin.H{
-		"message": "Job created successfully",
-		"job":     job,
-	})
+	services.LogJobCreated(job.CompanyID, adminID(c), job.ID, job.Title)
+	c.JSON(http.StatusCreated, gin.H{"message": "Job created successfully", "job": job})
 }
 
-// GetJobs returns all jobs for a company
 func GetJobs(c *gin.Context) {
-	companyID, err := getCompanyID(c)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
-		return
-	}
-	var jobs []models.Job
-
-	// Auto-close expired jobs for this company before fetching
-	// A job is considered expired if its deadline date is before today's date.
+	company := companyID(c)
 	today := time.Now().UTC().Format("2006-01-02")
-	if err := config.DB.
-		Model(&models.Job{}).
-		Where("company_id = ? AND status = ? AND deadline < ?", companyID, "open", today).
+	if err := config.DB.Model(&models.Job{}).
+		Where("company_id = ? AND status = 'open' AND deadline < ?", company, today).
 		Update("status", "closed").Error; err != nil {
-		log.Printf("GetJobs: failed to auto-close expired jobs for company %s: %v", companyID, err)
+		log.Printf("auto-close expired jobs for %s: %v", company, err)
 	}
 
-	query := config.DB.Where("company_id = ?", companyID)
-
-	// Filter by status if provided
+	query := config.DB.Where("company_id = ?", company).Order("created_at desc")
 	if status := c.Query("status"); status != "" {
 		query = query.Where("status = ?", status)
 	}
 
+	var jobs []models.Job
 	if err := query.Find(&jobs).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch jobs"})
+		serverError(c, "Failed to fetch jobs")
 		return
 	}
-
 	c.JSON(http.StatusOK, gin.H{"jobs": jobs})
 }
 
-// GetJob returns a single job by ID
 func GetJob(c *gin.Context) {
-	jobID := c.Param("id")
-	companyID, err := getCompanyID(c)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+	job, ok := findCompanyJob(c)
+	if !ok {
 		return
 	}
-
-	var job models.Job
-	if err := config.DB.Where("id = ? AND company_id = ?", jobID, companyID).First(&job).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
-		return
-	}
-
 	c.JSON(http.StatusOK, gin.H{"job": job})
 }
 
-// GetPublicJobs returns open jobs for public (no auth needed)
+// GetPublicJobs lists open jobs for a company's public careers page.
 func GetPublicJobs(c *gin.Context) {
-	companyID := c.Param("companyId")
-	var jobs []models.Job
-
-	now := time.Now()
-	err := config.DB.Where("company_id = ? AND status = ? AND deadline > ?",
-		companyID, "open", now.Format("2006-01-02")).Find(&jobs).Error
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch jobs"})
+	company, ok := uuidParam(c, "companyId")
+	if !ok {
 		return
 	}
-
+	var jobs []models.Job
+	err := config.DB.
+		Omit("shortlist_criteria").
+		Where("company_id = ? AND status = 'open' AND deadline >= ?", company, time.Now().UTC().Format("2006-01-02")).
+		Order("created_at desc").
+		Find(&jobs).Error
+	if err != nil {
+		serverError(c, "Failed to fetch jobs")
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"jobs": jobs})
 }
 
-// UpdateJob updates an existing job
-func UpdateJob(c *gin.Context) {
-	jobID := c.Param("id")
-	companyID, err := getCompanyID(c)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+// GetPublicJob returns one job for the public apply page, including whether it still accepts applications.
+func GetPublicJob(c *gin.Context) {
+	id, ok := uuidParam(c, "id")
+	if !ok {
 		return
 	}
-
 	var job models.Job
-	if err := config.DB.Where("id = ? AND company_id = ?", jobID, companyID).First(&job).Error; err != nil {
+	err := config.DB.Omit("shortlist_criteria").First(&job, "id = ?", id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
 		return
 	}
-
-	// Store old values for logging
-	oldStatus := job.Status
-	oldTitle := job.Title
-	jobUUID, _ := uuid.Parse(jobID)
-	companyUUID, _ := uuid.Parse(companyID)
-	adminIDVal, _ := c.Get("admin_id")
-	adminIDStr, _ := adminIDVal.(string)
-	adminUUID, _ := uuid.Parse(adminIDStr)
-
-	var jobRequest struct {
-		Title            string `json:"title"`
-		Description      string `json:"description"`
-		Requirements     string `json:"requirements"`
-		Location         string `json:"location"`
-		JobType          string `json:"job_type"`
-		SalaryRange      string `json:"salary_range"`
-		Deadline         string `json:"deadline"`
-		Status           string `json:"status"`
-		AutoShortlist    bool   `json:"auto_shortlist"`
-		ShortlistCriteria string `json:"shortlist_criteria"`
-	}
-
-	if err := c.ShouldBindJSON(&jobRequest); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if err != nil {
+		serverError(c, "Failed to load job")
 		return
 	}
-
-	// Update fields if provided
-	if jobRequest.Title != "" {
-		job.Title = jobRequest.Title
-	}
-	if jobRequest.Description != "" {
-		job.Description = jobRequest.Description
-	}
-	if jobRequest.Requirements != "" {
-		job.Requirements = jobRequest.Requirements
-	}
-	if jobRequest.Location != "" {
-		job.Location = jobRequest.Location
-	}
-	if jobRequest.JobType != "" {
-		job.JobType = jobRequest.JobType
-	}
-	if jobRequest.SalaryRange != "" {
-		job.SalaryRange = jobRequest.SalaryRange
-	}
-	if jobRequest.Deadline != "" {
-		deadlineStr := strings.TrimSpace(jobRequest.Deadline)
-		deadlineTime, err := time.Parse("2006-01-02", deadlineStr)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error":   "Invalid deadline format. Use YYYY-MM-DD",
-				"details": err.Error(),
-			})
-			return
-		}
-		// Create DateOnly type
-		job.Deadline = models.DateOnly{
-			Time: time.Date(deadlineTime.Year(), deadlineTime.Month(), deadlineTime.Day(), 0, 0, 0, 0, time.UTC),
-		}
-	}
-	if jobRequest.Status != "" {
-		job.Status = jobRequest.Status
-	}
-	job.AutoShortlist = jobRequest.AutoShortlist
-	if jobRequest.ShortlistCriteria != "" {
-		job.ShortlistCriteria = &jobRequest.ShortlistCriteria
-	} else {
-		job.ShortlistCriteria = nil
-	}
-
-	job.UpdatedAt = time.Now()
-
-	if err := config.DB.Save(&job).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update job"})
-		return
-	}
-
-	// Log job update - check if status changed or other fields
-	changes := make(map[string]interface{})
-	if jobRequest.Status != "" && jobRequest.Status != oldStatus {
-		services.LogJobStatusChanged(companyUUID, adminUUID, jobUUID, job.Title, oldStatus, job.Status)
-	} else {
-		// Log general update
-		if jobRequest.Title != "" && jobRequest.Title != oldTitle {
-			changes["title"] = map[string]interface{}{"old": oldTitle, "new": jobRequest.Title}
-		}
-		if len(changes) > 0 {
-			services.LogJobUpdated(companyUUID, adminUUID, jobUUID, job.Title, changes)
-		} else {
-			services.LogJobUpdated(companyUUID, adminUUID, jobUUID, job.Title, map[string]interface{}{"updated": true})
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Job updated successfully",
-		"job":     job,
-	})
+	c.JSON(http.StatusOK, gin.H{"job": job, "accepting_applications": !job.Closed(time.Now().UTC())})
 }
 
-// DeleteJob deletes a job
+func UpdateJob(c *gin.Context) {
+	job, ok := findCompanyJob(c)
+	if !ok {
+		return
+	}
+	var req jobRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		badRequest(c, err)
+		return
+	}
+
+	oldStatus, oldTitle := job.Status, job.Title
+	if err := req.apply(job); err != nil {
+		badRequest(c, err)
+		return
+	}
+	if err := config.DB.Save(job).Error; err != nil {
+		serverError(c, "Failed to update job")
+		return
+	}
+
+	if job.Status != oldStatus {
+		services.LogJobStatusChanged(job.CompanyID, adminID(c), job.ID, job.Title, oldStatus, job.Status)
+	} else {
+		changes := map[string]any{"updated": true}
+		if job.Title != oldTitle {
+			changes = map[string]any{"title": map[string]string{"old": oldTitle, "new": job.Title}}
+		}
+		services.LogJobUpdated(job.CompanyID, adminID(c), job.ID, job.Title, changes)
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Job updated successfully", "job": job})
+}
+
+// DeleteJob keeps the job's applications; the FK sets their job_id to null.
 func DeleteJob(c *gin.Context) {
-	jobID := c.Param("id")
-	companyID, err := getCompanyID(c)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Company ID not found in token"})
+	job, ok := findCompanyJob(c)
+	if !ok {
 		return
 	}
-
-	var job models.Job
-	if err := config.DB.Where("id = ? AND company_id = ?", jobID, companyID).First(&job).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
+	if err := config.DB.Delete(job).Error; err != nil {
+		serverError(c, "Failed to delete job")
 		return
 	}
-
-	// Store job details for logging before deletion
-	jobTitle := job.Title
-	jobUUID, _ := uuid.Parse(jobID)
-	companyUUID, _ := uuid.Parse(companyID)
-	adminIDVal, _ := c.Get("admin_id")
-	adminIDStr, _ := adminIDVal.(string)
-	adminUUID, _ := uuid.Parse(adminIDStr)
-
-	if err := config.DB.Delete(&job).Error; err != nil {
-		log.Printf("DeleteJob ERROR: Failed to delete job %s: %v", jobID, err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to delete job",
-			"details": err.Error(),
-		})
-		return
-	}
-
-	// Log job deletion (async, don't fail if logging fails)
-	services.LogJobDeleted(companyUUID, adminUUID, jobUUID, jobTitle)
-
+	services.LogJobDeleted(job.CompanyID, adminID(c), job.ID, job.Title)
 	c.JSON(http.StatusOK, gin.H{"message": "Job deleted successfully"})
 }
 
+func findCompanyJob(c *gin.Context) (*models.Job, bool) {
+	id, ok := uuidParam(c, "id")
+	if !ok {
+		return nil, false
+	}
+	return loadCompanyJob(c, id)
+}
+
+func loadCompanyJob(c *gin.Context, id uuid.UUID) (*models.Job, bool) {
+	var job models.Job
+	err := config.DB.Where("id = ? AND company_id = ?", id, companyID(c)).First(&job).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
+		return nil, false
+	}
+	if err != nil {
+		serverError(c, "Failed to load job")
+		return nil, false
+	}
+	return &job, true
+}

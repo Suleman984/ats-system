@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { activityLogAPI, ActivityLog } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { activityLogAPI, ActivityLog, errorMessage } from "@/lib/api";
+import { toast } from "@/components/Toast";
 
 export default function ActivityLogsPage() {
   const [logs, setLogs] = useState<ActivityLog[]>([]);
@@ -13,27 +14,23 @@ export default function ActivityLogsPage() {
     date_to: "",
   });
 
-  useEffect(() => {
-    fetchLogs();
-  }, [filters]);
-
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     try {
       setLoading(true);
-      const params: any = {};
-      if (filters.action_type) params.action_type = filters.action_type;
-      if (filters.entity_type) params.entity_type = filters.entity_type;
-      if (filters.date_from) params.date_from = filters.date_from;
-      if (filters.date_to) params.date_to = filters.date_to;
+      const params = Object.fromEntries(Object.entries(filters).filter(([, value]) => value));
 
       const response = await activityLogAPI.getAll(params);
       setLogs(response.data.logs || []);
     } catch (error) {
-      console.error("Failed to fetch activity logs:", error);
+      toast.error(errorMessage(error, "Failed to fetch activity logs"));
     } finally {
       setLoading(false);
     }
-  };
+  }, [filters]);
+
+  useEffect(() => {
+    fetchLogs();
+  }, [fetchLogs]);
 
   const getActionIcon = (actionType: string) => {
     const icons: Record<string, string> = {

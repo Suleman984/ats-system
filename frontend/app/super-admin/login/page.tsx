@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { superAdminAPI } from "@/lib/api";
+import { superAdminAPI, errorMessage } from "@/lib/api";
 import { useSuperAdminStore } from "@/lib/store";
 
 export default function SuperAdminLoginPage() {
@@ -37,8 +37,8 @@ export default function SuperAdminLoginPage() {
       const response = await superAdminAPI.login(formData);
       login(response.data.super_admin, response.data.token);
       router.push("/super-admin/dashboard");
-    } catch (err: any) {
-      setError(err.response?.data?.error || "Login failed");
+    } catch (err) {
+      setError(errorMessage(err, "Login failed"));
     } finally {
       setLoading(false);
     }
