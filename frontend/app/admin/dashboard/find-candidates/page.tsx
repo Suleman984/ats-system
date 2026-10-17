@@ -10,6 +10,8 @@ import {
   type CandidateSearchResult,
 } from "@/lib/api";
 import { toast } from "@/components/Toast";
+import { APPLICATION_STATUSES } from "@/lib/status";
+import FileLink from "@/components/applications/FileLink";
 
 export default function FindCandidatesPage() {
   const [searchResults, setSearchResults] = useState<CandidateSearchResult[]>(
@@ -29,6 +31,8 @@ export default function FindCandidatesPage() {
     limit: 50,
   });
   const [totalCandidates, setTotalCandidates] = useState(0);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [reparsing, setReparsing] = useState(false);
   const [showDetails, setShowDetails] = useState<string | null>(null);
   const [candidateDetails, setCandidateDetails] = useState<CandidateDetails | null>(null);
 
@@ -84,6 +88,7 @@ export default function FindCandidatesPage() {
       const response = await candidateSearchAPI.search(request);
       setSearchResults(response.data.candidates || []);
       setTotalCandidates(response.data.total || 0);
+      setHasSearched(true);
     } catch (error) {
       toast.error(errorMessage(error, "Failed to search candidates. Please try again."));
     } finally {
@@ -101,6 +106,22 @@ export default function FindCandidatesPage() {
     }
   };
 
+  const handleReparseAll = async () => {
+    setReparsing(true);
+    try {
+      const { data } = await candidateSearchAPI.reparseAll();
+      toast.success(
+        data.total
+          ? `Reading ${data.total} unparsed CV(s) in the background. Search again in a few minutes.`
+          : "All CVs are already searchable."
+      );
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to start CV parsing"));
+    } finally {
+      setReparsing(false);
+    }
+  };
+
   const getMatchScoreColor = (score: number) => {
     if (score >= 70) return "bg-green-100 text-green-800";
     if (score >= 40) return "bg-yellow-100 text-yellow-800";
@@ -110,11 +131,23 @@ export default function FindCandidatesPage() {
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
-        <h1 className="text-3xl font-bold mb-6">🔍 Find Candidates</h1>
-        <p className="text-gray-600 mb-6">
-          Search through all CVs in your database to find the perfect
-          candidates.
-        </p>
+        <div className="flex flex-wrap justify-between items-start gap-4 mb-6">
+          <div>
+            <h1 className="text-3xl font-bold mb-2">🔍 Find Candidates</h1>
+            <p className="text-gray-600">
+              Search through all CVs in your database to find the perfect
+              candidates.
+            </p>
+          </div>
+          <button
+            onClick={handleReparseAll}
+            disabled={reparsing}
+            title="CVs that couldn't be read when submitted are skipped by search until parsed"
+            className="px-4 py-2 text-sm border border-blue-600 text-blue-600 rounded-lg hover:bg-blue-50 disabled:opacity-50"
+          >
+            {reparsing ? "Starting..." : "↻ Parse unread CVs"}
+          </button>
+        </div>
 
         {/* Search Form */}
         <div className="bg-white rounded-lg shadow p-6 mb-6">
@@ -247,9 +280,11 @@ export default function FindCandidatesPage() {
                 }
               >
                 <option value="">All Statuses</option>
-                <option value="pending">Pending</option>
-                <option value="shortlisted">Shortlisted</option>
-                <option value="rejected">Rejected</option>
+                {APPLICATION_STATUSES.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.label}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -379,11 +414,12 @@ export default function FindCandidatesPage() {
                       )} */}
                     </div>
                     <div className="flex flex-col gap-2 ml-4">
-                      <a
-                        href={result.application.resume_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={async () => {
+                      <FileLink
+                        applicationId={result.application.id}
+                        kind="resume"
+                        url={result.application.resume_url}
+                        hasFile={result.application.has_resume_file}
+                        onOpen={async () => {
                           try {
                             await applicationAPI.trackCVView(
                               result.application.id
@@ -396,7 +432,7 @@ export default function FindCandidatesPage() {
                         className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 text-center"
                       >
                         View CV
-                      </a>
+                      </FileLink>
                       <button
                         onClick={() => handleViewDetails(result.application.id)}
                         className="px-3 py-1 bg-gray-600 text-white rounded text-sm hover:bg-gray-700"
@@ -445,17 +481,19 @@ export default function FindCandidatesPage() {
                               </a>
                             </div>
                           )}
-                          {candidateDetails.candidate.portfolio_url && (
+                          {(candidateDetails.candidate.portfolio_url ||
+                            candidateDetails.candidate.has_portfolio_file) && (
                             <div>
                               <strong>Portfolio:</strong>{" "}
-                              <a
-                                href={candidateDetails.candidate.portfolio_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
+                              <FileLink
+                                applicationId={candidateDetails.candidate.id}
+                                kind="portfolio"
+                                url={candidateDetails.candidate.portfolio_url}
+                                hasFile={candidateDetails.candidate.has_portfolio_file}
                                 className="text-blue-600 hover:underline"
                               >
-                                {candidateDetails.candidate.portfolio_url}
-                              </a>
+                                {candidateDetails.candidate.portfolio_url || "Open uploaded portfolio"}
+                              </FileLink>
                             </div>
                           )}
                           {candidateDetails.cv_text && (
@@ -485,7 +523,7 @@ export default function FindCandidatesPage() {
           </div>
         )}
 
-        {!loading && searchResults.length === 0 && (
+        {!loading && hasSearched && searchResults.length === 0 && (
           <div className="bg-white rounded-lg shadow p-6 text-center text-gray-500">
             No candidates found. Try adjusting your search criteria.
           </div>

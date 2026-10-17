@@ -4,14 +4,30 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 const (
 	StatusPending     = "pending"
 	StatusCVViewed    = "cv_viewed"
 	StatusShortlisted = "shortlisted"
+	StatusInterview   = "interview"
+	StatusOffer       = "offer"
+	StatusHired       = "hired"
 	StatusRejected    = "rejected"
 )
+
+// NextStage is the stage a recruiter can advance each post-shortlist status to.
+var NextStage = map[string]string{
+	StatusShortlisted: StatusInterview,
+	StatusInterview:   StatusOffer,
+	StatusOffer:       StatusHired,
+}
+
+// Undecided reports whether no shortlist/reject decision has been made yet.
+func Undecided(status string) bool {
+	return status == StatusPending || status == StatusCVViewed
+}
 
 type Application struct {
 	ID                   uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
@@ -46,7 +62,44 @@ type Application struct {
 	TalentPoolAddedAt *time.Time `json:"talent_pool_added_at,omitempty"`
 	TalentPoolAddedBy *uuid.UUID `gorm:"type:uuid" json:"talent_pool_added_by,omitempty"`
 
+	// Object paths in the private buckets; never serialized. Clients see only the Has* flags and
+	// fetch files through signed URLs.
+	ResumePath       *string `json:"-"`
+	PortfolioPath    *string `json:"-"`
+	HasResumeFile    bool    `gorm:"-" json:"has_resume_file"`
+	HasPortfolioFile bool    `gorm:"-" json:"has_portfolio_file"`
+	// Candidate messages the company hasn't read yet; filled in by list endpoints.
+	UnreadMessages int `gorm:"-" json:"unread_messages"`
+
 	Job *Job `gorm:"foreignKey:JobID" json:"job,omitempty"`
+}
+
+func (a *Application) AfterFind(*gorm.DB) error {
+	a.SetFileFlags()
+	return nil
+}
+
+func (a *Application) SetFileFlags() {
+	a.HasResumeFile, a.HasPortfolioFile = a.ResumePath != nil, a.PortfolioPath != nil
+}
+
+// Upload kinds and the bucket each is stored in.
+const (
+	UploadResume    = "resume"
+	UploadPortfolio = "portfolio"
+)
+
+// Upload is a file a candidate sent before submitting; an application claims it exactly once.
+type Upload struct {
+	ID           uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	Kind         string
+	ObjectPath   string
+	ContentType  string
+	SizeBytes    int
+	OriginalName string
+	ParsedText   *string
+	ClaimedAt    *time.Time
+	CreatedAt    time.Time
 }
 
 // JobTitle falls back to a placeholder once the job has been deleted.

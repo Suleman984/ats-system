@@ -4,9 +4,9 @@
 insert into companies (id, company_name, email, company_website, subscription_status)
 values ('11111111-1111-4111-8111-111111111111', 'Acme Labs', 'admin@acme.test', 'https://acme.test', 'active');
 
-insert into admins (id, company_id, name, email, password_hash)
+insert into admins (id, company_id, name, email, password_hash, email_verified_at)
 values ('22222222-2222-4222-8222-222222222222', '11111111-1111-4111-8111-111111111111',
-        'Ayesha Khan', 'admin@acme.test', '$2a$10$GLF4uCxB8wGvGPc/eseHAuoLf5.8Dlfzw0yjWlukJDd2FDZuKe4SC');
+        'Ayesha Khan', 'admin@acme.test', '$2a$10$GLF4uCxB8wGvGPc/eseHAuoLf5.8Dlfzw0yjWlukJDd2FDZuKe4SC', now());
 
 insert into super_admins (name, email, password_hash)
 values ('Platform Owner', 'owner@ats.test', '$2a$10$GLF4uCxB8wGvGPc/eseHAuoLf5.8Dlfzw0yjWlukJDd2FDZuKe4SC');

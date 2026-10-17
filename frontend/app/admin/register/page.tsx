@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { authAPI, errorMessage } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
+import ResendVerification from "@/components/auth/ResendVerification";
 
 export default function RegisterPage() {
   const router = useRouter();
-  const login = useAuthStore((state) => state.login);
+  const { isAuthenticated, initialized, checkAuth } = useAuthStore();
+  const [sentTo, setSentTo] = useState("");
   const [formData, setFormData] = useState({
     company_name: "",
     email: "",
@@ -19,21 +21,45 @@ export default function RegisterPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
+
+  useEffect(() => {
+    if (initialized && isAuthenticated) {
+      router.replace("/admin/dashboard");
+    }
+  }, [initialized, isAuthenticated, router]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
 
     try {
-      const response = await authAPI.register(formData);
-      login(response.data.admin, response.data.token);
-      router.push("/admin/dashboard");
+      await authAPI.register(formData);
+      setSentTo(formData.email);
     } catch (err) {
       setError(errorMessage(err, "Registration failed"));
     } finally {
       setLoading(false);
     }
   };
+
+  if (sentTo) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="max-w-md w-full bg-white p-8 rounded-lg shadow-lg text-center">
+          <h2 className="text-3xl font-bold mb-4">Check your inbox</h2>
+          <p className="text-gray-600 mb-6">
+            We sent a link to <strong>{sentTo}</strong>. Open it to verify your email and finish
+            setting up your account. The link expires in 24 hours.
+          </p>
+          <ResendVerification email={sentTo} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -90,7 +116,7 @@ export default function RegisterPage() {
             <input
               type="password"
               required
-              minLength={6}
+              minLength={8}
               className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
               value={formData.password}
               onChange={(e) =>

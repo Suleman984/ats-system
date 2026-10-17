@@ -15,6 +15,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"ats-backend/models"
 )
 
 // Criteria defines what a job requires from a CV.
@@ -100,7 +102,12 @@ func ExtractTextFromURL(cvURL string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	text, err := extractText(data, contentType, strings.ToLower(cvURL))
+	return ExtractTextFromBytes(data, contentType, strings.ToLower(cvURL))
+}
+
+// ExtractTextFromBytes pulls readable text out of a PDF/DOCX/plain-text CV already in memory.
+func ExtractTextFromBytes(data []byte, contentType, name string) (string, error) {
+	text, err := extractText(data, contentType, strings.ToLower(name))
 	if err != nil {
 		return "", err
 	}
@@ -108,6 +115,18 @@ func ExtractTextFromURL(cvURL string) (string, error) {
 		return "", errors.New("CV text is too short or unreadable; scanned PDFs need OCR first")
 	}
 	return text, nil
+}
+
+// ExtractApplicationCVText reads an application's CV from private storage or its external link.
+func ExtractApplicationCVText(app *models.Application) (string, error) {
+	if app.ResumePath != nil {
+		data, err := GetObject(BucketResumes, *app.ResumePath)
+		if err != nil {
+			return "", err
+		}
+		return ExtractTextFromBytes(data, "", *app.ResumePath)
+	}
+	return ExtractTextFromURL(app.ResumeURL)
 }
 
 func extractText(data []byte, contentType, name string) (string, error) {

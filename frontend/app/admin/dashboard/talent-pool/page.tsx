@@ -4,8 +4,11 @@ import { useEffect, useState } from "react";
 import { crmAPI, Application, errorMessage } from "@/lib/api";
 import { toast } from "@/components/Toast";
 import Link from "next/link";
+import { useDashboardHref } from "@/lib/dashboard-path";
+import FileLink from "@/components/applications/FileLink";
 
 export default function TalentPoolPage() {
+  const href = useDashboardHref();
   const [applications, setApplications] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -61,7 +64,7 @@ export default function TalentPoolPage() {
               Add candidates to the talent pool from the Applications page
             </p>
             <Link
-              href="/admin/dashboard/applications"
+              href={href("/admin/dashboard/applications")}
               className="mt-4 inline-block bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700"
             >
               Go to Applications
@@ -153,14 +156,15 @@ export default function TalentPoolPage() {
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex gap-2">
-                          <a
-                            href={app.resume_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                          <FileLink
+                            applicationId={app.id}
+                            kind="resume"
+                            url={app.resume_url}
+                            hasFile={app.has_resume_file}
                             className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
                           >
                             View CV
-                          </a>
+                          </FileLink>
                           <button
                             onClick={() => handleRemove(app.id, app.full_name)}
                             className="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700"

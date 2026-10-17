@@ -3,35 +3,69 @@ import axios, { isAxiosError } from "axios";
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
 
+// The session lives in an HttpOnly cookie, so requests just need credentials. The client header
+// is required by the API on writes (CSRF guard) and can't be sent cross-site without CORS approval.
 const api = axios.create({
   baseURL: API_BASE_URL,
+  withCredentials: true,
   headers: {
     "Content-Type": "application/json",
+    "X-ATS-Client": "web",
   },
 });
 
-// Super-admin and company-admin tokens are scoped to their own routes.
-api.interceptors.request.use((config) => {
-  if (typeof window !== "undefined") {
-    const isSuperAdminRoute = config.url?.startsWith("/super-admin");
-    const token = localStorage.getItem(isSuperAdminRoute ? "super_admin_token" : "token");
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-  }
-  return config;
-});
+// Local copies of the signed-in user (display data only; never the token).
+export const ADMIN_USER_KEY = "user";
+export const SUPER_ADMIN_USER_KEY = "super_admin";
 
-// Public endpoints use a separate instance so admin tokens are never attached.
+// A 401 means the session is over: forget the user and return to the matching login.
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const url: string = error.config?.url ?? "";
+    const isAuthCall = url.startsWith("/auth/") || url === "/super-admin/login";
+    if (typeof window !== "undefined" && !isAuthCall && error.response?.status === 401) {
+      const { pathname, search } = window.location;
+      let loginPath = "/admin/login";
+      if (url.startsWith("/super-admin")) {
+        localStorage.removeItem(SUPER_ADMIN_USER_KEY);
+        loginPath = "/super-admin/login";
+      } else {
+        localStorage.removeItem(ADMIN_USER_KEY);
+        if (pathname.startsWith("/embed")) {
+          const companyId = new URLSearchParams(search).get("company_id");
+          loginPath = companyId
+            ? `/embed/login?company_id=${encodeURIComponent(companyId)}`
+            : "/embed/login";
+        }
+      }
+      if (!pathname.startsWith(loginPath.split("?")[0])) window.location.assign(loginPath);
+    }
+    return Promise.reject(error);
+  }
+);
+
+// Public endpoints use a separate instance without credentials, so session cookies are never sent.
 const publicApi = axios.create({
   baseURL: API_BASE_URL,
 });
+
+// Machine-readable error code from the API, e.g. "email_unverified" or "plan_limit".
+export function errorCode(error: unknown): string | undefined {
+  return isAxiosError<{ code?: string }>(error) ? error.response?.data?.code : undefined;
+}
 
 export function errorMessage(error: unknown, fallback: string): string {
   if (isAxiosError<{ error?: string; message?: string }>(error)) {
     return error.response?.data?.message || error.response?.data?.error || fallback;
   }
   return fallback;
+}
+
+// Deadlines are calendar dates; parsing them as local time keeps them from shifting a day west of UTC.
+export function formatDateOnly(date: string): string {
+  const [y, m, d] = date.slice(0, 10).split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString();
 }
 
 // Types
@@ -62,15 +96,17 @@ export interface Company {
   updated_at: string;
 }
 
+export type AdminRole = "owner" | "recruiter";
+
 export interface Admin {
   id: string;
   name: string;
   email: string;
   company_id: string;
+  role: AdminRole;
 }
 
 export interface AuthResponse {
-  token: string;
   admin: Admin;
   message?: string;
 }
@@ -92,6 +128,12 @@ export interface Job {
   updated_at: string;
 }
 
+// The candidate-facing subset of Job returned by the public endpoints.
+export type PublicJob = Pick<
+  Job,
+  "id" | "title" | "description" | "requirements" | "location" | "job_type" | "salary_range" | "deadline" | "created_at"
+>;
+
 export interface Application {
   id: string;
   job_id?: string;
@@ -99,7 +141,11 @@ export interface Application {
   full_name: string;
   email: string;
   phone?: string;
+  // An external link; uploaded files are private and opened via openApplicationFile.
   resume_url: string;
+  has_resume_file?: boolean;
+  has_portfolio_file?: boolean;
+  unread_messages?: number;
   cover_letter?: string;
   years_of_experience: number;
   current_position?: string;
@@ -122,9 +168,25 @@ export interface Application {
 
 // Auth APIs
 export const authAPI = {
+  // Registration never signs in: the account activates from the emailed verification link.
   register: (data: RegisterRequest) =>
-    api.post<AuthResponse>("/auth/register", data),
+    publicApi.post<{ message: string }>("/auth/register", data),
+  verifyEmail: (token: string) => api.post<AuthResponse>("/auth/verify-email", { token }),
+  resendVerification: (email: string) =>
+    publicApi.post<{ message: string }>("/auth/verify-email/resend", { email }),
   login: (data: LoginRequest) => api.post<AuthResponse>("/auth/login", data),
+  logout: () => api.post<{ message: string }>("/auth/logout"),
+  me: () => api.get<{ admin: Admin }>("/auth/me"),
+  getInvite: (token: string) =>
+    publicApi.get<{ email: string; role: AdminRole; company_name: string }>("/auth/invites", {
+      params: { token },
+    }),
+  acceptInvite: (token: string, name: string, password: string) =>
+    api.post<AuthResponse>("/auth/invites/accept", { token, name, password }),
+  forgotPassword: (email: string) =>
+    publicApi.post<{ message: string }>("/auth/forgot-password", { email }),
+  resetPassword: (token: string, password: string) =>
+    publicApi.post<{ message: string }>("/auth/reset-password", { token, password }),
 };
 
 // Super Admin Types
@@ -135,7 +197,6 @@ export interface SuperAdmin {
 }
 
 export interface SuperAdminAuthResponse {
-  token: string;
   super_admin: SuperAdmin;
   message?: string;
 }
@@ -175,9 +236,15 @@ export interface ActivityLog {
 export const superAdminAPI = {
   login: (data: LoginRequest) =>
     api.post<SuperAdminAuthResponse>("/super-admin/login", data),
+  logout: () => api.post<{ message: string }>("/super-admin/logout"),
   getStats: () => api.get<{ stats: SuperAdminStats }>("/super-admin/stats"),
   getAllCompanies: () =>
     api.get<{ companies: CompanyWithStats[] }>("/super-admin/companies"),
+  updateCompany: (
+    id: string,
+    data: { subscription_status?: string; subscription_tier?: string }
+  ) =>
+    api.put<{ message: string; company: Company }>(`/super-admin/companies/${id}`, data),
 };
 
 // Activity Log APIs
@@ -230,12 +297,18 @@ export const candidateSearchAPI = {
       total: number;
     }>("/candidates/search", data),
   getDetails: (id: string) => api.get<CandidateDetails>(`/candidates/${id}`),
+  reparseAll: () =>
+    api.post<{ message: string; total: number }>("/candidates/reparse-all"),
+  reparse: (id: string) =>
+    api.post<{ message: string; characters: number }>(`/candidates/${id}/reparse`),
   addManual: (data: {
     job_id: string;
     full_name: string;
     email: string;
     phone?: string;
-    resume_url: string;
+    resume_url?: string;
+    resume_upload_id?: string;
+    portfolio_upload_id?: string;
     cover_letter?: string;
     years_of_experience?: number;
     current_position?: string;
@@ -274,18 +347,42 @@ export const jobAPI = {
     api.get<{ jobs: Job[] }>("/jobs", { params }),
   getById: (id: string) => api.get<{ job: Job }>(`/jobs/${id}`),
   getPublic: (companyId: string) =>
-    api.get<{ jobs: Job[] }>(`/jobs/public/${companyId}`),
+    publicApi.get<{ jobs: PublicJob[]; company_name: string }>(`/jobs/public/${companyId}`),
   getPublicById: (id: string) =>
-    publicApi.get<{ job: Job; accepting_applications: boolean }>(`/public/jobs/${id}`),
+    publicApi.get<{
+      job: PublicJob;
+      company_id: string;
+      company_name: string;
+      accepting_applications: boolean;
+    }>(`/public/jobs/${id}`),
   update: (id: string, data: Partial<Job>) =>
     api.put<{ message: string; job: Job }>(`/jobs/${id}`, data),
   delete: (id: string) => api.delete<{ message: string }>(`/jobs/${id}`),
 };
 
+export interface DashboardStats {
+  total_jobs: number;
+  open_jobs: number;
+  total_applications: number;
+  shortlisted: number;
+}
+
+export const messagesAPI = {
+  unreadSummary: () =>
+    api.get<{ total: number; by_job: Record<string, number> }>("/messages/unread-summary"),
+};
+
+export const dashboardAPI = {
+  getStats: () =>
+    api.get<{ stats: DashboardStats; recent_applications: Application[] }>(
+      "/dashboard/stats"
+    ),
+};
+
 // Application APIs
 export const applicationAPI = {
-  submit: (data: Partial<Application>) =>
-    api.post<{ message: string; application: Application }>(
+  submit: (data: CandidateSubmission & { job_id: string }) =>
+    publicApi.post<{ message: string; application: Application }>(
       "/applications",
       data
     ),
@@ -294,7 +391,11 @@ export const applicationAPI = {
     status?: string;
     date_from?: string;
     date_to?: string;
-  }) => api.get<{ applications: Application[] }>("/applications", { params }),
+    unread?: boolean;
+    limit?: number;
+    offset?: number;
+  }) =>
+    api.get<{ applications: Application[]; total: number }>("/applications", { params }),
   shortlist: (id: string) =>
     api.put<{ message: string; application: Application }>(
       `/applications/${id}/shortlist`
@@ -303,10 +404,20 @@ export const applicationAPI = {
     api.put<{ message: string }>(`/applications/${id}/reject`),
   delete: (id: string) =>
     api.delete<{ message: string }>(`/applications/${id}`),
-  bulkDelete: (status: string) =>
+  bulkDelete: (status: string, jobId?: string) =>
     api.post<{ message: string; deleted_count: number; total_found: number }>(
       "/applications/bulk-delete",
-      { status }
+      { status, job_id: jobId || undefined }
+    ),
+  getFileUrl: (id: string, kind: "resume" | "portfolio") =>
+    api.get<{ url: string; expires_in: number }>(`/applications/${id}/files/${kind}`),
+  advance: (id: string) =>
+    api.put<{ message: string; application: Application }>(
+      `/applications/${id}/advance`
+    ),
+  reopen: (id: string) =>
+    api.put<{ message: string; application: Application }>(
+      `/applications/${id}/reopen`
     ),
   trackCVView: (id: string) =>
     api.post<{ message: string; application: Application }>(
@@ -415,15 +526,13 @@ export interface ApplicationStatus {
   last_status_update?: string;
   expected_response_date?: string;
   expected_response_days?: number;
-  score: number;
   unread_messages?: number;
   status_history?: Array<{
     status: string;
     label: string;
-    timestamp: string;
+    timestamp: string | null;
     completed: boolean;
   }>;
-  can_message?: boolean;
   job: {
     id: string;
     title: string;
@@ -459,11 +568,9 @@ export const candidatePortalAPI = {
       }
     ),
   getMessages: (applicationId: string, email: string) =>
-    publicApi.get<{ messages: Message[]; count: number }>(
+    publicApi.post<{ messages: Message[]; count: number }>(
       "/candidate/messages",
-      {
-        params: { application_id: applicationId, email },
-      }
+      { application_id: applicationId, email }
     ),
 };
 
@@ -521,6 +628,112 @@ export const aiShortlistAPI = {
     }>("/applications/ai-shortlist-batch", data),
 };
 
+// Team
+export interface TeamInvite {
+  id: string;
+  email: string;
+  role: AdminRole;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface TeamMember extends Admin {
+  created_at: string;
+}
+
+export const teamAPI = {
+  get: () => api.get<{ members: TeamMember[]; invites: TeamInvite[] }>("/team"),
+  invite: (email: string, role: AdminRole) =>
+    api.post<{ message: string; invite: TeamInvite }>("/team/invites", { email, role }),
+  revokeInvite: (id: string) => api.delete<{ message: string }>(`/team/invites/${id}`),
+  setRole: (id: string, role: AdminRole) =>
+    api.put<{ message: string }>(`/team/members/${id}/role`, { role }),
+  remove: (id: string) => api.delete<{ message: string }>(`/team/members/${id}`),
+};
+
+// Billing
+export interface SubscriptionPlan {
+  id: string;
+  name: string;
+  price_pkr: number;
+  features: string | string[];
+  max_jobs: number;
+  max_applications: number;
+  max_admins: number;
+  ai_shortlisting: boolean;
+}
+
+export interface PlanUsage {
+  open_jobs: number;
+  applications_this_month: number;
+  admins: number;
+  pending_invites: number;
+}
+
+export interface Payment {
+  id: string;
+  amount: number;
+  currency: string;
+  status: "pending" | "completed" | "failed" | "refunded";
+  created_at: string;
+}
+
+export const billingAPI = {
+  get: () =>
+    api.get<{
+      plans: SubscriptionPlan[];
+      current_plan: SubscriptionPlan;
+      usage: PlanUsage;
+      payments: Payment[];
+      subscription?: { current_period_end: string; plan_id: string };
+      checkout_available: boolean;
+    }>("/billing"),
+  checkout: (plan: string) =>
+    api.post<{ checkout_url: string; payment_id: string }>("/billing/checkout", { plan }),
+  confirm: (paymentId: string) =>
+    api.post<{ payment: Payment }>(`/billing/payments/${paymentId}/confirm`),
+};
+
+// Uploaded files are private; the API returns an ID to submit with the application, never a URL.
+export interface UploadResult {
+  upload_id: string;
+  file_name: string;
+  size: number;
+}
+
+// What a candidate (or a recruiter adding one) sends; exactly one CV source is required.
+export interface CandidateSubmission {
+  full_name: string;
+  email: string;
+  phone?: string;
+  resume_url?: string;
+  resume_upload_id?: string;
+  portfolio_url?: string;
+  portfolio_upload_id?: string;
+  cover_letter?: string;
+  years_of_experience?: number;
+  current_position?: string;
+  linkedin_url?: string;
+}
+
+// Opens a private CV/portfolio through a short-lived signed link. The tab is opened synchronously
+// (inside the click) so popup blockers allow it, then pointed at the link once it arrives.
+export async function openApplicationFile(id: string, kind: "resume" | "portfolio") {
+  const win = window.open("", "_blank");
+  try {
+    const { data } = await applicationAPI.getFileUrl(id, kind);
+    if (win) {
+      win.opener = null;
+      win.location.href = data.url;
+    } else {
+      window.location.assign(data.url);
+    }
+  } catch (error) {
+    win?.close();
+    throw error;
+  }
+}
+
 // Uploads use their own instance so axios sets the multipart Content-Type.
 const uploadApi = axios.create({
   baseURL: API_BASE_URL,
@@ -530,7 +743,7 @@ export const uploadAPI = {
   uploadCV: (file: File) => {
     const formData = new FormData();
     formData.append("file", file);
-    return uploadApi.post<{ message: string; file_url: string }>(
+    return uploadApi.post<UploadResult>(
       "/upload/cv",
       formData
     );
@@ -538,7 +751,7 @@ export const uploadAPI = {
   uploadPortfolio: (file: File) => {
     const formData = new FormData();
     formData.append("file", file);
-    return uploadApi.post<{ message: string; file_url: string }>(
+    return uploadApi.post<UploadResult>(
       "/upload/portfolio",
       formData
     );

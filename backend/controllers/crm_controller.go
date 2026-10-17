@@ -158,13 +158,13 @@ func setTalentPool(c *gin.Context, applicationID uuid.UUID, inPool bool) {
 		return
 	}
 
-	message := "Candidate removed from talent pool"
+	message, action := "Candidate removed from talent pool", "candidate_removed_from_talent_pool"
 	if inPool {
-		message = "Candidate added to talent pool"
-		company := app.CompanyID
-		services.LogActivity(&company, &admin, "candidate_added_to_talent_pool", "application", &app.ID,
-			message+": "+app.FullName, map[string]any{"candidate_name": app.FullName, "candidate_email": app.Email})
+		message, action = "Candidate added to talent pool", "candidate_added_to_talent_pool"
 	}
+	company := app.CompanyID
+	services.LogActivity(&company, &admin, action, "application", &app.ID,
+		message+": "+app.FullName, map[string]any{"candidate_name": app.FullName, "candidate_email": app.Email})
 	c.JSON(http.StatusOK, gin.H{"message": message, "application": app})
 }
 
@@ -294,6 +294,12 @@ func statusIcon(status string) string {
 	switch status {
 	case models.StatusShortlisted:
 		return "✅"
+	case models.StatusInterview:
+		return "🗓️"
+	case models.StatusOffer:
+		return "📨"
+	case models.StatusHired:
+		return "🎉"
 	case models.StatusRejected:
 		return "❌"
 	case models.StatusCVViewed:

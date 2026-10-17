@@ -4,9 +4,12 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { jobAPI, candidateSearchAPI, uploadAPI, errorMessage, type Job } from "@/lib/api";
 import { toast } from "@/components/Toast";
+import { APPLICATION_STATUSES } from "@/lib/status";
+import { useDashboardHref } from "@/lib/dashboard-path";
 
 export default function ManualAddCandidatePage() {
   const router = useRouter();
+  const href = useDashboardHref();
   const [loading, setLoading] = useState(false);
   const [uploadingCV, setUploadingCV] = useState(false);
   const [cvUploadMessage, setCvUploadMessage] = useState("");
@@ -17,6 +20,7 @@ export default function ManualAddCandidatePage() {
     email: "",
     phone: "",
     resume_url: "",
+    resume_upload_id: "",
     cover_letter: "",
     years_of_experience: 0,
     current_position: "",
@@ -67,9 +71,8 @@ export default function ManualAddCandidatePage() {
     setCvUploadMessage("");
     try {
       const response = await uploadAPI.uploadCV(file);
-      setFormData({ ...formData, resume_url: response.data.file_url });
-      setCvUploadMessage("✓ CV uploaded successfully!");
-      setTimeout(() => setCvUploadMessage(""), 5000);
+      setFormData((prev) => ({ ...prev, resume_upload_id: response.data.upload_id }));
+      setCvUploadMessage(`✓ ${response.data.file_name} uploaded`);
     } catch (error) {
       setCvUploadMessage("");
       toast.error(errorMessage(error, "Failed to upload CV"));
@@ -86,19 +89,25 @@ export default function ManualAddCandidatePage() {
       return;
     }
 
-    if (!formData.resume_url) {
+    const usingCVFile = formData.resume_type === "file";
+    if (usingCVFile ? !formData.resume_upload_id : !formData.resume_url) {
       toast.error("Please provide a CV/resume (either URL or file upload)");
       return;
     }
 
     setLoading(true);
     try {
-      await candidateSearchAPI.addManual(formData);
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { resume_type, resume_url, resume_upload_id, ...rest } = formData;
+      await candidateSearchAPI.addManual({
+        ...rest,
+        ...(usingCVFile ? { resume_upload_id } : { resume_url }),
+      });
 
       toast.success(
         "Candidate added successfully! CV will be analyzed automatically."
       );
-      router.push("/admin/dashboard/applications");
+      router.push(href("/admin/dashboard/applications"));
     } catch (error) {
       toast.error(errorMessage(error, "Failed to add candidate. Please try again."));
     } finally {
@@ -378,9 +387,11 @@ export default function ManualAddCandidatePage() {
                 setFormData({ ...formData, status: e.target.value })
               }
             >
-              <option value="pending">Pending</option>
-              <option value="shortlisted">Shortlisted</option>
-              <option value="rejected">Rejected</option>
+              {APPLICATION_STATUSES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
             </select>
           </div>
 

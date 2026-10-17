@@ -16,7 +16,7 @@ import (
 
 type manualCandidateRequest struct {
 	JobID  uuid.UUID `json:"job_id" binding:"required"`
-	Status string    `json:"status" binding:"omitempty,oneof=pending cv_viewed shortlisted rejected"`
+	Status string    `json:"status" binding:"omitempty,oneof=pending cv_viewed shortlisted interview offer hired rejected"`
 	Notes  string    `json:"notes" binding:"max=5000"`
 	candidateFields
 }
@@ -25,6 +25,10 @@ type manualCandidateRequest struct {
 func AddManualCandidate(c *gin.Context) {
 	var req manualCandidateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		badRequest(c, err)
+		return
+	}
+	if err := req.validateLinks(); err != nil {
 		badRequest(c, err)
 		return
 	}
@@ -44,16 +48,25 @@ func AddManualCandidate(c *gin.Context) {
 		return
 	}
 
+	if !planCheck(c, services.CheckCanAcceptApplication(job.CompanyID)) {
+		return
+	}
+
 	app := req.toApplication(job)
 	if req.Status != "" {
 		app.Status = req.Status
 	}
-	if err := config.DB.Create(&app).Error; err != nil {
+	resumeUpload, err := createApplication(&app, &req.candidateFields)
+	if errors.Is(err, errUploadUnavailable) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "The uploaded file has expired or was already used. Please upload it again."})
+		return
+	}
+	if err != nil {
 		serverError(c, "Failed to add candidate")
 		return
 	}
 
-	go services.ProcessApplicationCV(app.ID, app.ResumeURL, job)
+	go services.ProcessApplicationCV(&app, uploadText(resumeUpload), scoringJob(job))
 
 	company, admin := job.CompanyID, adminID(c)
 	services.LogActivity(&company, &admin, "manual_candidate_added", "application", &app.ID,

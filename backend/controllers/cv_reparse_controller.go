@@ -3,19 +3,36 @@ package controllers
 import (
 	"log"
 	"net/http"
+	"sync"
 
 	"ats-backend/config"
 	"ats-backend/models"
 	"ats-backend/services"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
+
+// reparsing tracks companies with a background reparse running so repeat clicks don't stack jobs.
+var reparsing sync.Map
 
 // ReparseAllCVs extracts text in the background for every application still missing it.
 func ReparseAllCVs(c *gin.Context) {
+	company := companyID(c)
+	if _, running := reparsing.LoadOrStore(company, true); running {
+		c.JSON(http.StatusConflict, gin.H{"error": "CV parsing is already running for your company"})
+		return
+	}
+	started := false
+	defer func() {
+		if !started {
+			reparsing.Delete(company)
+		}
+	}()
+
 	var applications []models.Application
-	err := config.DB.Select("id", "resume_url").
-		Where("company_id = ? AND (parsed_cv_text IS NULL OR parsed_cv_text = '') AND resume_url <> ''", companyID(c)).
+	err := config.DB.Select("id", "resume_url", "resume_path").
+		Where("company_id = ? AND (parsed_cv_text IS NULL OR parsed_cv_text = '') AND (resume_url <> '' OR resume_path IS NOT NULL)", company).
 		Find(&applications).Error
 	if err != nil {
 		serverError(c, "Failed to fetch applications")
@@ -26,10 +43,13 @@ func ReparseAllCVs(c *gin.Context) {
 		return
 	}
 
-	go func() {
+	started = true
+	go func(company uuid.UUID) {
+		defer reparsing.Delete(company)
 		failed := 0
-		for _, app := range applications {
-			text, err := services.ExtractTextFromURL(app.ResumeURL)
+		for i := range applications {
+			app := &applications[i]
+			text, err := services.ExtractApplicationCVText(app)
 			if err == nil {
 				err = services.SaveAnalysis(app.ID, text, nil)
 			}
@@ -39,7 +59,7 @@ func ReparseAllCVs(c *gin.Context) {
 			}
 		}
 		log.Printf("CV reparse finished: %d of %d failed", failed, len(applications))
-	}()
+	}(company)
 
 	c.JSON(http.StatusAccepted, gin.H{"message": "CV reparsing started in background", "total": len(applications)})
 }
@@ -54,7 +74,7 @@ func ReparseSingleCV(c *gin.Context) {
 		return
 	}
 
-	text, err := services.ExtractTextFromURL(app.ResumeURL)
+	text, err := services.ExtractApplicationCVText(app)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "Failed to parse CV", "details": err.Error()})
 		return

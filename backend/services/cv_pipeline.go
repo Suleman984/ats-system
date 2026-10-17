@@ -39,11 +39,18 @@ func SaveAnalysis(applicationID uuid.UUID, cvText string, result *MatchResult) e
 }
 
 // ProcessApplicationCV downloads the CV once, stores its text and match score.
-func ProcessApplicationCV(applicationID uuid.UUID, resumeURL string, job *models.Job) {
-	cvText, err := ExtractTextFromURL(resumeURL)
-	if err != nil {
-		log.Printf("application %s: CV extraction failed: %v", applicationID, err)
-		return
+// parsedText, when already known (e.g. extracted at upload time), skips reading the file again.
+func ProcessApplicationCV(app *models.Application, parsedText *string, job *models.Job) {
+	applicationID := app.ID
+	var cvText string
+	if parsedText != nil && *parsedText != "" {
+		cvText = *parsedText
+	} else {
+		var err error
+		if cvText, err = ExtractApplicationCVText(app); err != nil {
+			log.Printf("application %s: CV extraction failed: %v", applicationID, err)
+			return
+		}
 	}
 	var result *MatchResult
 	if job != nil {

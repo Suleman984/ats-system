@@ -72,6 +72,12 @@ func SendStatusUpdateSMS(phone, candidateName, jobTitle, status string) error {
 		message = fmt.Sprintf("Hi %s, your application for %s has been reviewed. We'll be in touch soon!", candidateName, jobTitle)
 	case "shortlisted":
 		message = fmt.Sprintf("Congratulations %s! You've been shortlisted for %s. We'll contact you soon with next steps.", candidateName, jobTitle)
+	case "interview":
+		message = fmt.Sprintf("Hi %s, you've moved to the interview stage for %s. We'll contact you to schedule.", candidateName, jobTitle)
+	case "offer":
+		message = fmt.Sprintf("Congratulations %s! We're preparing an offer for %s. Details coming soon.", candidateName, jobTitle)
+	case "hired":
+		message = fmt.Sprintf("Welcome aboard %s! You've been hired for %s.", candidateName, jobTitle)
 	case "rejected":
 		message = fmt.Sprintf("Hi %s, thank you for applying to %s. We've decided to move forward with other candidates at this time.", candidateName, jobTitle)
 	default:

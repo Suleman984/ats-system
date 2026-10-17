@@ -18,6 +18,9 @@ var statusLabels = map[string]string{
 	models.StatusPending:     "Application Pending",
 	models.StatusCVViewed:    "CV Viewed",
 	models.StatusShortlisted: "Shortlisted",
+	models.StatusInterview:   "Interview Stage",
+	models.StatusOffer:       "Offer Stage",
+	models.StatusHired:       "Hired",
 	models.StatusRejected:    "Not Selected",
 }
 
@@ -66,13 +69,29 @@ func GetApplicationStatus(c *gin.Context) {
 
 	history := []gin.H{{
 		"status": models.StatusPending, "label": "Application Submitted",
-		"timestamp": app.AppliedAt, "completed": app.Status != models.StatusPending,
+		"timestamp": app.AppliedAt, "completed": true,
 	}}
 	if app.CVViewedAt != nil {
 		history = append(history, gin.H{"status": models.StatusCVViewed, "label": "CV Viewed", "timestamp": app.CVViewedAt, "completed": true})
 	}
-	if app.Status == models.StatusShortlisted || app.Status == models.StatusRejected {
+	// Only the shortlist decision and the current stage carry timestamps; stages passed in between show without one.
+	if app.Status == models.StatusRejected {
 		history = append(history, gin.H{"status": app.Status, "label": statusLabel(app.Status), "timestamp": app.ReviewedAt, "completed": true})
+	} else if !models.Undecided(app.Status) {
+		for _, stage := range []string{models.StatusShortlisted, models.StatusInterview, models.StatusOffer, models.StatusHired} {
+			var ts any
+			if stage == models.StatusShortlisted {
+				ts = app.ReviewedAt
+			}
+			if stage == app.Status {
+				if stage != models.StatusShortlisted {
+					ts = app.LastStatusUpdate
+				}
+				history = append(history, gin.H{"status": stage, "label": statusLabel(stage), "timestamp": ts, "completed": true})
+				break
+			}
+			history = append(history, gin.H{"status": stage, "label": statusLabel(stage), "timestamp": ts, "completed": true})
+		}
 	}
 
 	expected := app.ExpectedResponseDate
@@ -88,7 +107,7 @@ func GetApplicationStatus(c *gin.Context) {
 		expectedDays = max(0, int(time.Until(*expected).Hours()/24))
 	}
 
-	job := gin.H{"id": nil, "title": app.JobTitle()}
+	job := gin.H{"id": nil, "title": app.JobTitle(), "company_name": publicCompanyName(app.CompanyID)}
 	if app.Job != nil {
 		job["id"] = app.Job.ID
 	}
@@ -105,10 +124,8 @@ func GetApplicationStatus(c *gin.Context) {
 		"last_status_update":     app.LastStatusUpdate,
 		"expected_response_date": expected,
 		"expected_response_days": expectedDays,
-		"score":                  app.Score,
 		"unread_messages":        unread,
 		"status_history":         history,
-		"can_message":            true,
 		"job":                    job,
 	}})
 }

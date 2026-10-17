@@ -68,7 +68,8 @@ function serializeCriteria(show: boolean, c: CriteriaState): string {
 }
 
 const inputClass = "w-full px-4 py-2 border rounded-lg";
-const today = () => new Date().toISOString().split("T")[0];
+// Local calendar date; toISOString() would give tomorrow/yesterday near midnight outside UTC.
+const today = () => new Date().toLocaleDateString("en-CA");
 
 export default function JobForm({ jobId, basePath }: JobFormProps) {
   const router = useRouter();
@@ -78,6 +79,7 @@ export default function JobForm({ jobId, basePath }: JobFormProps) {
   const [formData, setFormData] = useState(emptyJob);
   const [showCriteria, setShowCriteria] = useState(false);
   const [criteria, setCriteria] = useState(emptyCriteria);
+  const [savedDeadline, setSavedDeadline] = useState("");
 
   useEffect(() => {
     if (!jobId) return;
@@ -94,6 +96,7 @@ export default function JobForm({ jobId, basePath }: JobFormProps) {
           deadline: job.deadline.slice(0, 10),
           status: job.status,
         });
+        setSavedDeadline(job.deadline.slice(0, 10));
         const saved = parseCriteria(job.shortlist_criteria);
         if (saved) {
           setCriteria(saved);
@@ -177,8 +180,10 @@ export default function JobForm({ jobId, basePath }: JobFormProps) {
               <input type="text" className={inputClass} value={formData.salary_range}
                 onChange={update("salary_range")} placeholder="e.g. $50k - $80k" />
             </Field>
+            {/* An expired job can still be edited without moving its deadline. */}
             <Field label="Application Deadline *" hint="Cannot select past dates">
-              <input type="date" required min={today()} className={inputClass}
+              <input type="date" required className={inputClass}
+                min={savedDeadline && savedDeadline < today() ? savedDeadline : today()}
                 value={formData.deadline} onChange={update("deadline")} />
             </Field>
           </div>

@@ -1,147 +1,71 @@
 import { create } from "zustand";
-import { Admin, SuperAdmin } from "./api";
+import {
+  ADMIN_USER_KEY,
+  SUPER_ADMIN_USER_KEY,
+  authAPI,
+  superAdminAPI,
+  type Admin,
+  type SuperAdmin,
+} from "./api";
 
-interface AuthState {
-  user: Admin | null;
-  token: string | null;
+// Global because the signed-in user is read by every dashboard layout and page.
+// The session itself is an HttpOnly cookie; only display data is kept in localStorage.
+interface SessionState<U> {
+  user: U | null;
   isAuthenticated: boolean;
-  login: (userData: Admin, token: string) => void;
-  logout: () => void;
-  checkAuth: () => void;
   initialized: boolean;
+  login: (user: U) => void;
+  logout: () => Promise<void>;
+  checkAuth: () => void;
 }
 
-interface SuperAdminAuthState {
-  user: SuperAdmin | null;
-  token: string | null;
-  isAuthenticated: boolean;
-  login: (userData: SuperAdmin, token: string) => void;
-  logout: () => void;
-  checkAuth: () => void;
-  initialized: boolean;
+const readStored = <U,>(key: string): U | null => {
+  if (typeof window === "undefined") return null;
+  try {
+    const stored = localStorage.getItem(key);
+    return stored ? (JSON.parse(stored) as U) : null;
+  } catch {
+    return null;
+  }
+};
+
+const createSessionStore = <U,>(
+  storageKey: string,
+  legacyTokenKey: string,
+  serverLogout: () => Promise<unknown>
+) =>
+  create<SessionState<U>>((set) => ({
+    user: null,
+    isAuthenticated: false,
+    initialized: false,
+    login: (user) => {
+      localStorage.setItem(storageKey, JSON.stringify(user));
+      set({ user, isAuthenticated: true, initialized: true });
+    },
+    logout: async () => {
+      // Clear locally even if the request fails; the cookie expires on its own.
+      await serverLogout().catch(() => undefined);
+      localStorage.removeItem(storageKey);
+      set({ user: null, isAuthenticated: false, initialized: true });
+    },
+    // Optimistic: trusts the stored user until an API call says otherwise (the 401 handler signs out).
+    checkAuth: () => {
+      // Tokens used to be stored here; drop any leftovers so scripts can't read them.
+      localStorage.removeItem(legacyTokenKey);
+      const user = readStored<U>(storageKey);
+      set({ user, isAuthenticated: Boolean(user), initialized: true });
+    },
+  }));
+
+export const useAuthStore = createSessionStore<Admin>(ADMIN_USER_KEY, "token", authAPI.logout);
+export const useSuperAdminStore = createSessionStore<SuperAdmin>(
+  SUPER_ADMIN_USER_KEY,
+  "super_admin_token",
+  superAdminAPI.logout
+);
+
+// Pulls the latest name/role from the server, e.g. after an owner changes someone's role.
+export async function refreshAdmin() {
+  const { data } = await authAPI.me();
+  useAuthStore.getState().login(data.admin);
 }
-
-// Helper to get stored user data
-const getStoredUser = (): Admin | null => {
-  if (typeof window === "undefined") return null;
-  const stored = localStorage.getItem("user");
-  if (stored) {
-    try {
-      return JSON.parse(stored);
-    } catch {
-      return null;
-    }
-  }
-  return null;
-};
-
-export const useAuthStore = create<AuthState>((set) => {
-  return {
-    user: null,
-    token: null,
-    isAuthenticated: false,
-    initialized: false,
-    login: (userData, token) => {
-      if (typeof window !== "undefined") {
-        localStorage.setItem("token", token);
-        localStorage.setItem("user", JSON.stringify(userData));
-      }
-      set({ user: userData, token, isAuthenticated: true, initialized: true });
-    },
-    logout: () => {
-      if (typeof window !== "undefined") {
-        localStorage.removeItem("token");
-        localStorage.removeItem("user");
-      }
-      set({
-        user: null,
-        token: null,
-        isAuthenticated: false,
-        initialized: true,
-      });
-    },
-    checkAuth: () => {
-      if (typeof window !== "undefined") {
-        const token = localStorage.getItem("token");
-        const user = getStoredUser();
-        if (token) {
-          set({ token, user, isAuthenticated: true, initialized: true });
-        } else {
-          set({
-            token: null,
-            user: null,
-            isAuthenticated: false,
-            initialized: true,
-          });
-        }
-      } else {
-        set({ initialized: true });
-      }
-    },
-  };
-});
-
-// Helper to get stored super admin data
-const getStoredSuperAdmin = (): SuperAdmin | null => {
-  if (typeof window === "undefined") return null;
-  const stored = localStorage.getItem("super_admin");
-  if (stored) {
-    try {
-      return JSON.parse(stored);
-    } catch {
-      return null;
-    }
-  }
-  return null;
-};
-
-export const useSuperAdminStore = create<SuperAdminAuthState>((set) => {
-  return {
-    user: null,
-    token: null,
-    isAuthenticated: false,
-    initialized: false,
-    login: (userData, token) => {
-      if (typeof window !== "undefined") {
-        localStorage.setItem("super_admin_token", token);
-        localStorage.setItem("super_admin", JSON.stringify(userData));
-      }
-      set({
-        user: userData,
-        token,
-        isAuthenticated: true,
-        initialized: true,
-      });
-    },
-    logout: () => {
-      if (typeof window !== "undefined") {
-        localStorage.removeItem("super_admin_token");
-        localStorage.removeItem("super_admin");
-      }
-      set({
-        user: null,
-        token: null,
-        isAuthenticated: false,
-        initialized: true,
-      });
-    },
-    checkAuth: () => {
-      if (typeof window !== "undefined") {
-        const token = localStorage.getItem("super_admin_token");
-        const user = getStoredSuperAdmin();
-        if (token) {
-          set({ token, user, isAuthenticated: true, initialized: true });
-        } else {
-          set({
-            token: null,
-            user: null,
-            isAuthenticated: false,
-            initialized: true,
-          });
-        }
-      } else {
-        set({ initialized: true });
-      }
-    },
-  };
-});

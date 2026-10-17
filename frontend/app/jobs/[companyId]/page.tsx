@@ -1,39 +1,47 @@
-"use client";
-
-import { useCallback, useEffect, useState } from "react";
-import { useParams } from "next/navigation";
-import { jobAPI, Job, errorMessage } from "@/lib/api";
-import { toast } from "@/components/Toast";
+import type { Metadata } from "next";
 import Link from "next/link";
+import { notFound } from "next/navigation";
+import { formatDateOnly } from "@/lib/api";
+import { getCompanyJobs, summarize } from "@/lib/public";
 
-export default function PublicJobsPage() {
-  const params = useParams();
-  const companyId = params.companyId as string;
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [loading, setLoading] = useState(true);
+type Props = { params: Promise<{ companyId: string }> };
 
-  const fetchJobs = useCallback(async () => {
-    try {
-      const response = await jobAPI.getPublic(companyId);
-      setJobs(response.data.jobs);
-    } catch (error) {
-      toast.error(errorMessage(error, "Failed to fetch jobs"));
-    } finally {
-      setLoading(false);
-    }
-  }, [companyId]);
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { companyId } = await params;
+  const data = await getCompanyJobs(companyId).catch(() => null);
+  if (!data) return { title: "Careers" };
+  const title = `Careers at ${data.company_name}`;
+  const description = `${data.jobs.length} open position${data.jobs.length === 1 ? "" : "s"} at ${data.company_name}. Browse roles and apply online.`;
+  return {
+    title,
+    description,
+    alternates: { canonical: `/jobs/${companyId}` },
+    openGraph: { title, description, type: "website", url: `/jobs/${companyId}` },
+  };
+}
 
-  useEffect(() => {
-    fetchJobs();
-  }, [fetchJobs]);
-
-  if (loading) return <div className="p-6">Loading...</div>;
+export default async function PublicJobsPage({ params }: Props) {
+  const { companyId } = await params;
+  let data;
+  try {
+    data = await getCompanyJobs(companyId);
+  } catch {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <p className="text-gray-600">
+          We couldn&apos;t load open positions right now. Please try again in a moment.
+        </p>
+      </div>
+    );
+  }
+  if (!data) notFound();
+  const { jobs, company_name: companyName } = data;
 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="bg-blue-600 text-white py-16">
         <div className="max-w-4xl mx-auto px-6">
-          <h1 className="text-4xl font-bold mb-4">Career Opportunities</h1>
+          <h1 className="text-4xl font-bold mb-4">Careers at {companyName}</h1>
           <p className="text-xl">Join our team and make an impact</p>
         </div>
       </div>
@@ -69,18 +77,16 @@ export default function PublicJobsPage() {
                     Open
                   </span>
                 </div>
-                <p className="text-gray-700 mb-4 whitespace-pre-line">
-                  {job.description.substring(0, 200)}...
-                </p>
+                <p className="text-gray-700 mb-4">{summarize(job.description, 200)}</p>
                 <div className="flex justify-between items-center">
                   <p className="text-sm text-gray-500">
-                    Deadline: {new Date(job.deadline).toLocaleDateString()}
+                    Deadline: {formatDateOnly(job.deadline)}
                   </p>
                   <Link
                     href={`/apply/${job.id}`}
                     className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
                   >
-                    Apply Now
+                    View &amp; Apply
                   </Link>
                 </div>
               </div>

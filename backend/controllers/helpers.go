@@ -3,10 +3,12 @@ package controllers
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"ats-backend/config"
 	"ats-backend/middleware"
 	"ats-backend/models"
+	"ats-backend/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -58,3 +60,26 @@ func serverError(c *gin.Context, message string) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// planCheck writes a 402 for plan-limit refusals (or a 500 for lookup failures) and returns false.
+func planCheck(c *gin.Context, err error) bool {
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, services.ErrPlanLimit) {
+		msg := strings.TrimPrefix(err.Error(), services.ErrPlanLimit.Error()+": ")
+		c.JSON(http.StatusPaymentRequired, gin.H{"error": msg, "code": "plan_limit"})
+		return false
+	}
+	serverError(c, "Failed to check plan limits")
+	return false
+}
+
+// scoringJob returns the job to score CVs against, or nil when the plan excludes CV scoring
+// (the CV text is still extracted so the candidate stays searchable).
+func scoringJob(job *models.Job) *models.Job {
+	if services.CheckCanScoreCVs(job.CompanyID) != nil {
+		return nil
+	}
+	return job
+}

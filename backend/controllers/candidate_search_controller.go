@@ -60,7 +60,7 @@ func SearchCandidates(c *gin.Context) {
 		query = query.Where("status = ?", req.Status)
 	}
 	if req.HasPortfolio != nil && *req.HasPortfolio {
-		query = query.Where("coalesce(portfolio_url, '') <> ''")
+		query = query.Where("(coalesce(portfolio_url, '') <> '' OR portfolio_path IS NOT NULL)")
 	}
 	if req.HasLinkedIn != nil && *req.HasLinkedIn {
 		query = query.Where("coalesce(linkedin_url, '') <> ''")
@@ -188,8 +188,8 @@ func GetCandidateDetails(c *gin.Context) {
 	if app.ParsedCVText != nil {
 		cvText = *app.ParsedCVText
 	}
-	if cvText == "" && app.ResumeURL != "" {
-		if text, err := services.ExtractTextFromURL(app.ResumeURL); err == nil {
+	if cvText == "" && (app.ResumeURL != "" || app.ResumePath != nil) {
+		if text, err := services.ExtractApplicationCVText(app); err == nil {
 			cvText = text
 			_ = services.SaveAnalysis(app.ID, text, nil)
 		}

@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"ats-backend/config"
+	"ats-backend/middleware"
 	"ats-backend/routes"
+	"ats-backend/services"
 	"ats-backend/utils"
 
 	"github.com/gin-gonic/gin"
@@ -31,6 +33,8 @@ func main() {
 	if err := config.InitDB(); err != nil {
 		log.Fatalf("database: %v", err)
 	}
+
+	services.StartUploadJanitor()
 
 	router := gin.Default()
 	// Only trust X-Forwarded-For from listed proxies so rate limits can't be spoofed.
@@ -74,7 +78,8 @@ func corsMiddleware(allowed []string) gin.HandlerFunc {
 			h := c.Writer.Header()
 			h.Set("Access-Control-Allow-Origin", origin)
 			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			h.Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			h.Set("Access-Control-Allow-Headers", "Content-Type, "+middleware.ClientHeader)
+			h.Set("Access-Control-Allow-Credentials", "true")
 			h.Set("Access-Control-Max-Age", "86400")
 			h.Add("Vary", "Origin")
 		}

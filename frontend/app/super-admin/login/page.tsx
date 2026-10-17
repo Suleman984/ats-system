@@ -35,7 +35,7 @@ export default function SuperAdminLoginPage() {
 
     try {
       const response = await superAdminAPI.login(formData);
-      login(response.data.super_admin, response.data.token);
+      login(response.data.super_admin);
       router.push("/super-admin/dashboard");
     } catch (err) {
       setError(errorMessage(err, "Login failed"));

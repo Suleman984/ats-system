@@ -39,9 +39,12 @@ export default function ActivityLogsPage() {
       job_updated: "✏️",
       job_deleted: "🗑️",
       job_status_changed: "🔄",
-      application_shortlisted: "✅",
-      application_rejected: "❌",
       application_status_changed: "🔄",
+      application_deleted: "🗑️",
+      applications_bulk_deleted: "🗑️",
+      manual_candidate_added: "➕",
+      candidate_added_to_talent_pool: "⭐",
+      candidate_removed_from_talent_pool: "☆",
     };
     return icons[actionType] || "📝";
   };
@@ -96,14 +99,19 @@ export default function ActivityLogsPage() {
                 <option value="job_updated">Job Updated</option>
                 <option value="job_deleted">Job Deleted</option>
                 <option value="job_status_changed">Job Status Changed</option>
-                <option value="application_shortlisted">
-                  Application Shortlisted
-                </option>
-                <option value="application_rejected">
-                  Application Rejected
-                </option>
                 <option value="application_status_changed">
                   Application Status Changed
+                </option>
+                <option value="application_deleted">Application Deleted</option>
+                <option value="applications_bulk_deleted">
+                  Applications Bulk Deleted
+                </option>
+                <option value="manual_candidate_added">Manual Candidate Added</option>
+                <option value="candidate_added_to_talent_pool">
+                  Added to Talent Pool
+                </option>
+                <option value="candidate_removed_from_talent_pool">
+                  Removed from Talent Pool
                 </option>
               </select>
             </div>

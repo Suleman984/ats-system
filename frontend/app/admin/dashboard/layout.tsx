@@ -1,9 +1,10 @@
 "use client";
 
-import { useAuthStore } from "@/lib/store";
+import { refreshAdmin, useAuthStore } from "@/lib/store";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import UnreadBell from "@/components/UnreadBell";
 
 export default function DashboardLayout({
   children,
@@ -19,6 +20,8 @@ export default function DashboardLayout({
   useEffect(() => {
     setMounted(true);
     checkAuth();
+    // Also validates the session cookie; a 401 here sends the user to login.
+    refreshAdmin().catch(() => undefined);
   }, [checkAuth]);
 
   useEffect(() => {
@@ -28,9 +31,13 @@ export default function DashboardLayout({
     }
   }, [isAuthenticated, initialized, mounted, router]);
 
-  // Show nothing while checking auth (prevents hydration mismatch)
+  // Static placeholder while checking auth (matches server render, so no hydration mismatch)
   if (!mounted || !initialized || !isAuthenticated) {
-    return null;
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-gray-600">Loading...</div>
+      </div>
+    );
   }
 
   const appMode = process.env.NEXT_PUBLIC_APP_MODE || "development";
@@ -73,8 +80,14 @@ export default function DashboardLayout({
                 <NavLink href="/admin/dashboard/activity-logs">
                   Activity Logs
                 </NavLink>
+                {user?.role === "owner" && (
+                  <NavLink href="/admin/dashboard/team">Team</NavLink>
+                )}
+                <NavLink href="/admin/dashboard/billing">Billing</NavLink>
               </div>
             </div>
+            <div className="flex items-center gap-2">
+              <UnreadBell />
             {/* Desktop User Info */}
             <div className="hidden md:flex items-center space-x-4">
               <span className="text-sm text-gray-600">{user?.name}</span>
@@ -126,6 +139,7 @@ export default function DashboardLayout({
                 )}
               </button>
             </div>
+            </div>
           </div>
         </div>
         {/* Mobile Menu */}
@@ -173,6 +187,20 @@ export default function DashboardLayout({
                 onClick={() => setMobileMenuOpen(false)}
               >
                 Activity Logs
+              </MobileNavLink>
+              {user?.role === "owner" && (
+                <MobileNavLink
+                  href="/admin/dashboard/team"
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  Team
+                </MobileNavLink>
+              )}
+              <MobileNavLink
+                href="/admin/dashboard/billing"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                Billing
               </MobileNavLink>
               <div className="pt-4 border-t border-gray-200">
                 <div className="px-3 py-2 text-sm text-gray-600">

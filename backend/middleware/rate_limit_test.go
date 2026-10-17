@@ -25,20 +25,36 @@ func TestRateLimitBlocksAfterLimit(t *testing.T) {
 	}
 }
 
-func TestAuthMiddlewareRequiresBearer(t *testing.T) {
+func TestAuthMiddlewareRequiresSessionCookie(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/", AuthMiddleware(), func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	for _, header := range []string{"", "Token abc", "Bearer "} {
+	for _, cookie := range []string{"", "not-a-jwt"} {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		if header != "" {
-			req.Header.Set("Authorization", header)
+		if cookie != "" {
+			req.AddCookie(&http.Cookie{Name: AdminCookie, Value: cookie})
 		}
+		// A bearer header alone no longer authenticates.
+		req.Header.Set("Authorization", "Bearer abc")
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("header %q: status %d, want 401", header, rec.Code)
+			t.Errorf("cookie %q: status %d, want 401", cookie, rec.Code)
 		}
+	}
+}
+
+func TestAuthMiddlewareRequiresClientHeaderOnWrites(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/", AuthMiddleware(), func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.AddCookie(&http.Cookie{Name: AdminCookie, Value: "anything"})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST without %s: status %d, want 403", ClientHeader, rec.Code)
 	}
 }

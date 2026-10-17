@@ -40,19 +40,37 @@ func GenerateSuperAdminJWT(superAdminID uuid.UUID) (string, error) {
 	return sign(superAdminID, audienceSuperAdmin, "")
 }
 
-// VerifyJWT returns the admin and company IDs from a company-admin token.
-func VerifyJWT(token string) (adminID, companyID uuid.UUID, err error) {
+// AdminToken is a verified company-admin token.
+type AdminToken struct {
+	AdminID   uuid.UUID
+	CompanyID uuid.UUID
+	IssuedAt  time.Time
+}
+
+// VerifyAdminToken also returns when the token was issued, so sessions predating a password change can be rejected.
+func VerifyAdminToken(token string) (AdminToken, error) {
 	claims, err := parse(token, audienceAdmin)
 	if err != nil {
-		return uuid.Nil, uuid.Nil, err
+		return AdminToken{}, err
 	}
-	if adminID, err = uuid.Parse(claims.Subject); err != nil {
-		return uuid.Nil, uuid.Nil, errors.New("invalid subject")
+	adminID, err := uuid.Parse(claims.Subject)
+	if err != nil {
+		return AdminToken{}, errors.New("invalid subject")
 	}
-	if companyID, err = uuid.Parse(claims.CompanyID); err != nil {
-		return uuid.Nil, uuid.Nil, errors.New("invalid company")
+	companyID, err := uuid.Parse(claims.CompanyID)
+	if err != nil {
+		return AdminToken{}, errors.New("invalid company")
 	}
-	return adminID, companyID, nil
+	if claims.IssuedAt == nil {
+		return AdminToken{}, errors.New("missing issued-at")
+	}
+	return AdminToken{adminID, companyID, claims.IssuedAt.Time}, nil
+}
+
+// VerifyJWT returns the admin and company IDs from a company-admin token.
+func VerifyJWT(token string) (adminID, companyID uuid.UUID, err error) {
+	t, err := VerifyAdminToken(token)
+	return t.AdminID, t.CompanyID, err
 }
 
 func VerifySuperAdminJWT(token string) (uuid.UUID, error) {

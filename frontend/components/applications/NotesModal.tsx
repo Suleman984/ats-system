@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { crmAPI, errorMessage, type CandidateNote } from "@/lib/api";
 import { toast } from "@/components/Toast";
+import { useAuthStore } from "@/lib/store";
 
 export default function NotesModal({
   applicationId,
@@ -18,6 +19,42 @@ export default function NotesModal({
   const [newNote, setNewNote] = useState("");
   const [isPrivate, setIsPrivate] = useState(false);
   const [loading, setLoading] = useState(false);
+  const currentAdminId = useAuthStore((state) => state.user?.id);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const [editPrivate, setEditPrivate] = useState(false);
+
+  const startEdit = (note: CandidateNote) => {
+    setEditingId(note.id);
+    setEditText(note.note);
+    setEditPrivate(note.is_private);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingId || !editText.trim()) return;
+    setLoading(true);
+    try {
+      await crmAPI.updateNote(editingId, editText.trim(), editPrivate);
+      toast.success("Note updated");
+      setEditingId(null);
+      onRefresh();
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to update note"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (noteId: string) => {
+    if (!window.confirm("Delete this note? This can't be undone.")) return;
+    try {
+      await crmAPI.deleteNote(noteId);
+      toast.success("Note deleted");
+      onRefresh();
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to delete note"));
+    }
+  };
 
   const handleAddNote = async () => {
     if (!newNote.trim()) {
@@ -71,10 +108,64 @@ export default function NotesModal({
                         )}
                       </p>
                     </div>
+                    {/* Only the author can change a note; the API enforces this too. */}
+                    {note.admin_id === currentAdminId && editingId !== note.id && (
+                      <div className="flex gap-3 text-xs">
+                        <button
+                          onClick={() => startEdit(note)}
+                          className="text-blue-600 hover:underline"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleDelete(note.id)}
+                          className="text-red-600 hover:underline"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <p className="text-gray-800 whitespace-pre-wrap">
-                    {note.note}
-                  </p>
+                  {editingId === note.id ? (
+                    <div>
+                      <textarea
+                        className="w-full px-3 py-2 border rounded-lg resize-none mb-2 bg-white"
+                        rows={3}
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                      />
+                      <div className="flex items-center justify-between">
+                        <label className="flex items-center text-sm text-gray-600">
+                          <input
+                            type="checkbox"
+                            checked={editPrivate}
+                            onChange={(e) => setEditPrivate(e.target.checked)}
+                            className="mr-2"
+                          />
+                          Private
+                        </label>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setEditingId(null)}
+                            className="px-3 py-1 text-sm text-gray-600 hover:text-gray-800"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={handleSaveEdit}
+                            disabled={loading || !editText.trim()}
+                            className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-blue-300"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-gray-800 whitespace-pre-wrap">
+                      {note.note}
+                    </p>
+                  )}
                 </div>
               ))
             )}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 
 	"ats-backend/config"
 	"ats-backend/models"
@@ -43,7 +44,7 @@ func scoreApplication(app *models.Application, criteria services.Criteria) (*ser
 	}
 	if text == "" {
 		var err error
-		if text, err = services.ExtractTextFromURL(app.ResumeURL); err != nil {
+		if text, err = services.ExtractApplicationCVText(app); err != nil {
 			return nil, err
 		}
 	}
@@ -69,6 +70,9 @@ func AIShortlistApplication(c *gin.Context) {
 	}
 	if app.Job == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "The job for this application was deleted"})
+		return
+	}
+	if !planCheck(c, services.CheckCanScoreCVs(app.CompanyID)) {
 		return
 	}
 
@@ -99,26 +103,40 @@ func BatchAIShortlist(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !planCheck(c, services.CheckCanScoreCVs(job.CompanyID)) {
+		return
+	}
 
 	var applications []models.Application
-	if err := config.DB.Where("job_id = ? AND status = ?", job.ID, models.StatusPending).Find(&applications).Error; err != nil {
+	undecided := []string{models.StatusPending, models.StatusCVViewed}
+	if err := config.DB.Where("job_id = ? AND status IN ?", job.ID, undecided).Find(&applications).Error; err != nil {
 		serverError(c, "Failed to fetch applications")
 		return
 	}
 
+	// Scoring downloads each CV, so a few run at once to keep large jobs within the request timeout.
+	const workers = 4
 	criteria := req.forJob(job)
-	results := make([]gin.H, 0, len(applications))
+	results := make([]gin.H, len(applications))
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
 	for i := range applications {
-		app := &applications[i]
-		entry := gin.H{"application_id": app.ID, "candidate_name": app.FullName}
-		if result, err := scoreApplication(app, criteria); err != nil {
-			log.Printf("score application %s: %v", app.ID, err)
-			entry["error"] = err.Error()
-		} else {
-			entry["match_score"], entry["analysis"] = result.MatchScore, result
-		}
-		results = append(results, entry)
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int) {
+			defer func() { <-sem; wg.Done() }()
+			app := &applications[i]
+			entry := gin.H{"application_id": app.ID, "candidate_name": app.FullName}
+			if result, err := scoreApplication(app, criteria); err != nil {
+				log.Printf("score application %s: %v", app.ID, err)
+				entry["error"] = err.Error()
+			} else {
+				entry["match_score"], entry["analysis"] = result.MatchScore, result
+			}
+			results[i] = entry
+		}(i)
 	}
+	wg.Wait()
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":        fmt.Sprintf("Analyzed %d applications. Review scores and shortlist manually.", len(applications)),

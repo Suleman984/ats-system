@@ -3,8 +3,9 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthStore } from "@/lib/store";
-import { jobAPI, applicationAPI, Application, errorMessage } from "@/lib/api";
+import { dashboardAPI, Application, errorMessage } from "@/lib/api";
 import { toast } from "@/components/Toast";
+import { statusBadge, statusLabel } from "@/lib/status";
 
 function EmbeddedDashboard() {
   const router = useRouter();
@@ -20,29 +21,25 @@ function EmbeddedDashboard() {
     []
   );
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [error, setError] = useState("");
 
   const urlCompanyId = searchParams.get("company_id");
 
   const fetchDashboardData = async () => {
     try {
-      const [jobsRes, appsRes] = await Promise.all([
-        jobAPI.getAll(),
-        applicationAPI.getAll(),
-      ]);
-      const jobs = jobsRes.data.jobs;
-      const applications = appsRes.data.applications;
-
+      const { data } = await dashboardAPI.getStats();
       setStats({
-        totalJobs: jobs.length,
-        openJobs: jobs.filter((j) => j.status === "open").length,
-        totalApplications: applications.length,
-        shortlisted: applications.filter((a) => a.status === "shortlisted")
-          .length,
+        totalJobs: data.stats.total_jobs,
+        openJobs: data.stats.open_jobs,
+        totalApplications: data.stats.total_applications,
+        shortlisted: data.stats.shortlisted,
       });
-      setRecentApplications(applications.slice(0, 5));
+      setRecentApplications(data.recent_applications);
+      setLoadFailed(false);
     } catch (error) {
       toast.error(errorMessage(error, "Failed to fetch dashboard data"));
+      setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -107,6 +104,21 @@ function EmbeddedDashboard() {
 
   return (
     <div className="p-4">
+      {loadFailed && (
+        <div className="mb-4 flex items-center justify-between rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+          <span>Couldn&apos;t load dashboard data.</span>
+          <button
+            onClick={() => {
+              setLoading(true);
+              fetchDashboardData();
+            }}
+            className="font-medium underline"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
         <StatsCard title="Total Jobs" value={stats.totalJobs} color="blue" />
@@ -128,19 +140,19 @@ function EmbeddedDashboard() {
         <ActionCard
           title="Post New Job"
           description="Create a new job opening"
-          link="/embed/dashboard/jobs/create"
+          link={`/embed/dashboard/jobs/create?company_id=${urlCompanyId}`}
           icon="➕"
         />
         <ActionCard
           title="View Applications"
           description="Review candidate applications"
-          link="/embed/dashboard/applications"
+          link={`/embed/dashboard/applications?company_id=${urlCompanyId}`}
           icon="📋"
         />
         <ActionCard
           title="Manage Jobs"
           description="Edit or close job postings"
-          link="/embed/dashboard/jobs"
+          link={`/embed/dashboard/jobs?company_id=${urlCompanyId}`}
           icon="💼"
         />
       </div>
@@ -167,15 +179,9 @@ function EmbeddedDashboard() {
                   </p>
                 </div>
                 <span
-                  className={`px-2 py-1 rounded-full text-xs ${
-                    app.status === "shortlisted"
-                      ? "bg-green-100 text-green-800"
-                      : app.status === "rejected"
-                      ? "bg-red-100 text-red-800"
-                      : "bg-yellow-100 text-yellow-800"
-                  }`}
+                  className={`px-2 py-1 rounded-full text-xs ${statusBadge(app.status)}`}
                 >
-                  {app.status}
+                  {statusLabel(app.status)}
                 </span>
               </div>
             ))

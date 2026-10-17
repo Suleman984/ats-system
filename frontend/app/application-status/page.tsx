@@ -1,8 +1,15 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { candidatePortalAPI, errorMessage, type ApplicationStatus } from "@/lib/api";
+import {
+  candidatePortalAPI,
+  errorMessage,
+  type ApplicationStatus,
+  type Message,
+} from "@/lib/api";
 import { toast } from "@/components/Toast";
+import MessageThread from "@/components/applications/MessageThread";
+import { statusBadge, statusIcon } from "@/lib/status";
 import { useSearchParams } from "next/navigation";
 
 function ApplicationStatus() {
@@ -13,6 +20,37 @@ function ApplicationStatus() {
     null
   );
   const [loading, setLoading] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+
+  // Uses the loaded application's own id/email so later edits to the inputs can't mismatch.
+  const loadMessages = async (app: ApplicationStatus) => {
+    setMessagesLoading(true);
+    try {
+      const response = await candidatePortalAPI.getMessages(app.id, app.email);
+      setMessages(response.data.messages);
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to load messages"));
+    } finally {
+      setMessagesLoading(false);
+    }
+  };
+
+  const handleSendMessage = async (text: string) => {
+    if (!application) return false;
+    try {
+      const response = await candidatePortalAPI.sendMessage(
+        application.id,
+        application.email,
+        text
+      );
+      setMessages((prev) => [...prev, response.data.data]);
+      return true;
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to send message"));
+      return false;
+    }
+  };
 
   const handleCheckStatus = async (
     emailParam?: string,
@@ -33,11 +71,13 @@ function ApplicationStatus() {
         applicationIdToUse
       );
       setApplication(response.data.application);
+      loadMessages(response.data.application);
     } catch (error) {
       toast.error(
         errorMessage(error, "Failed to load application status. Please check your email and application ID.")
       );
       setApplication(null);
+      setMessages([]);
     } finally {
       setLoading(false);
     }
@@ -55,39 +95,9 @@ function ApplicationStatus() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "shortlisted":
-        return "bg-green-100 text-green-800 border-green-300";
-      case "rejected":
-        return "bg-red-100 text-red-800 border-red-300";
-      case "cv_viewed":
-        return "bg-blue-100 text-blue-800 border-blue-300";
-      case "under_review":
-        return "bg-yellow-100 text-yellow-800 border-yellow-300";
-      case "interview_scheduled":
-        return "bg-purple-100 text-purple-800 border-purple-300";
-      default:
-        return "bg-gray-100 text-gray-800 border-gray-300";
-    }
-  };
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "shortlisted":
-        return "✓";
-      case "rejected":
-        return "✗";
-      case "cv_viewed":
-        return "👁️";
-      case "under_review":
-        return "📋";
-      case "interview_scheduled":
-        return "📅";
-      default:
-        return "⏳";
-    }
-  };
+  // Candidates see "Not Selected" rather than "Rejected", so only colour and icon come from the shared map.
+  const getStatusColor = (status: string) => statusBadge(status);
+  const getStatusIcon = (status: string) => statusIcon(status);
 
   return (
     <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
@@ -152,6 +162,11 @@ function ApplicationStatus() {
                 <div>
                   <h3 className="font-semibold text-lg mb-2">
                     {application.job.title}
+                    {application.job.company_name && (
+                      <span className="font-normal text-gray-500">
+                        {" "}· {application.job.company_name}
+                      </span>
+                    )}
                   </h3>
                   <p className="text-gray-600">
                     Applied on:{" "}
@@ -204,9 +219,11 @@ function ApplicationStatus() {
                             >
                               {step.label}
                             </p>
-                            <p className="text-sm text-gray-500">
-                              {new Date(step.timestamp).toLocaleString()}
-                            </p>
+                            {step.timestamp && (
+                              <p className="text-sm text-gray-500">
+                                {new Date(step.timestamp).toLocaleString()}
+                              </p>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -215,6 +232,25 @@ function ApplicationStatus() {
                 )}
 
               </div>
+            </div>
+
+            {/* Messages */}
+            <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+              <h2 className="text-2xl font-bold mb-1">Messages</h2>
+              <p className="text-gray-600 mb-4">
+                Questions about your application? Message the hiring team here.
+                {application.unread_messages
+                  ? ` You have ${application.unread_messages} new message${
+                      application.unread_messages !== 1 ? "s" : ""
+                    }.`
+                  : ""}
+              </p>
+              <MessageThread
+                messages={messages}
+                viewer="candidate"
+                loading={messagesLoading}
+                onSend={handleSendMessage}
+              />
             </div>
           </>
         )}

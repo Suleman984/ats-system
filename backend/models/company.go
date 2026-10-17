@@ -6,6 +6,13 @@ import (
 	"github.com/google/uuid"
 )
 
+// Company subscription statuses and tiers; tiers match subscription_plans names (lowercased).
+const (
+	CompanyTrial     = "trial"
+	CompanyActive    = "active"
+	CompanySuspended = "suspended"
+)
+
 type Company struct {
 	ID                 uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	CompanyName        string    `json:"company_name"`

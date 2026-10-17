@@ -7,11 +7,32 @@ import { toast } from "@/components/Toast";
 export default function CompaniesPage() {
   const [companies, setCompanies] = useState<CompanyWithStats[]>([]);
   const [loading, setLoading] = useState(true);
+  const [savingId, setSavingId] = useState<string | null>(null);
+
+  const updateCompany = async (
+    company: CompanyWithStats,
+    change: { subscription_status?: string; subscription_tier?: string },
+    confirmText: string
+  ) => {
+    if (!window.confirm(confirmText)) return;
+    setSavingId(company.id);
+    try {
+      await superAdminAPI.updateCompany(company.id, change);
+      setCompanies((prev) =>
+        prev.map((c) => (c.id === company.id ? { ...c, ...change } : c))
+      );
+      toast.success(`${company.company_name} updated`);
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to update company"));
+    } finally {
+      setSavingId(null);
+    }
+  };
 
   const fetchCompanies = async () => {
     try {
       const response = await superAdminAPI.getAllCompanies();
-      setCompanies(response.data.companies);
+      setCompanies(response.data.companies ?? []);
     } catch (error) {
       toast.error(errorMessage(error, "Failed to fetch companies"));
     } finally {
@@ -57,6 +78,9 @@ export default function CompaniesPage() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                     Created
                   </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
@@ -81,14 +105,29 @@ export default function CompaniesPage() {
                               ? "bg-green-100 text-green-800"
                               : company.subscription_status === "trial"
                               ? "bg-yellow-100 text-yellow-800"
+                              : company.subscription_status === "suspended"
+                              ? "bg-red-100 text-red-800"
                               : "bg-gray-100 text-gray-800"
                           }`}
                         >
                           {company.subscription_status}
                         </span>
-                        <p className="text-xs text-gray-500 mt-1">
-                          {company.subscription_tier}
-                        </p>
+                        <select
+                          className="mt-1 block text-xs border rounded px-1 py-0.5"
+                          value={company.subscription_tier}
+                          disabled={savingId === company.id}
+                          onChange={(e) =>
+                            updateCompany(
+                              company,
+                              { subscription_tier: e.target.value },
+                              `Change ${company.company_name} to the ${e.target.value} plan?`
+                            )
+                          }
+                        >
+                          <option value="starter">starter</option>
+                          <option value="professional">professional</option>
+                          <option value="enterprise">enterprise</option>
+                        </select>
                       </div>
                     </td>
                     <td className="px-6 py-4 text-sm">{company.job_count}</td>
@@ -97,6 +136,37 @@ export default function CompaniesPage() {
                     </td>
                     <td className="px-6 py-4 text-sm">
                       {new Date(company.created_at).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4 text-sm">
+                      {company.subscription_status === "suspended" ? (
+                        <button
+                          disabled={savingId === company.id}
+                          onClick={() =>
+                            updateCompany(
+                              company,
+                              { subscription_status: "active" },
+                              `Reactivate ${company.company_name}? Their admins can log in again.`
+                            )
+                          }
+                          className="text-green-700 hover:underline disabled:opacity-50"
+                        >
+                          Reactivate
+                        </button>
+                      ) : (
+                        <button
+                          disabled={savingId === company.id}
+                          onClick={() =>
+                            updateCompany(
+                              company,
+                              { subscription_status: "suspended" },
+                              `Suspend ${company.company_name}? Their admins will be signed out and blocked from logging in, and their public job pages go offline.`
+                            )
+                          }
+                          className="text-red-600 hover:underline disabled:opacity-50"
+                        >
+                          Suspend
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

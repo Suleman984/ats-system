@@ -2,7 +2,8 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { authAPI, errorMessage } from "@/lib/api";
+import { authAPI, errorCode, errorMessage } from "@/lib/api";
+import ResendVerification from "@/components/auth/ResendVerification";
 import { useAuthStore } from "@/lib/store";
 
 function EmbeddedLogin() {
@@ -14,6 +15,7 @@ function EmbeddedLogin() {
     password: "",
   });
   const [error, setError] = useState("");
+  const [unverified, setUnverified] = useState(false);
   const [loading, setLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
 
@@ -41,7 +43,7 @@ function EmbeddedLogin() {
         return;
       }
 
-      login(response.data.admin, response.data.token);
+      login(response.data.admin);
 
       const redirectUrl = urlCompanyId
         ? `/embed/dashboard?company_id=${urlCompanyId}`
@@ -49,6 +51,7 @@ function EmbeddedLogin() {
       router.push(redirectUrl);
     } catch (err) {
       setError(errorMessage(err, "Login failed"));
+      setUnverified(errorCode(err) === "email_unverified");
     } finally {
       setLoading(false);
     }
@@ -65,6 +68,11 @@ function EmbeddedLogin() {
         {error && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4 text-sm">
             {error}
+          </div>
+        )}
+        {unverified && (
+          <div className="mb-4">
+            <ResendVerification email={formData.email} />
           </div>
         )}
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -100,6 +108,17 @@ function EmbeddedLogin() {
             {loading ? "Logging in..." : "Login"}
           </button>
         </form>
+        {/* The reset pages can't be framed, so they open in a new tab. */}
+        <p className="text-center mt-4 text-sm">
+          <a
+            href="/admin/forgot-password"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:underline"
+          >
+            Forgot password?
+          </a>
+        </p>
       </div>
     </div>
   );

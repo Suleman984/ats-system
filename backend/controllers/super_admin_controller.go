@@ -1,15 +1,19 @@
 package controllers
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
 	"ats-backend/config"
+	"ats-backend/middleware"
 	"ats-backend/models"
+	"ats-backend/services"
 	"ats-backend/utils"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 func SuperAdminLogin(c *gin.Context) {
@@ -35,8 +39,8 @@ func SuperAdminLogin(c *gin.Context) {
 		serverError(c, "Failed to generate token")
 		return
 	}
+	middleware.SetSessionCookie(c, middleware.SuperAdminCookie, token)
 	c.JSON(http.StatusOK, gin.H{
-		"token":       token,
 		"super_admin": gin.H{"id": superAdmin.ID, "name": superAdmin.Name, "email": superAdmin.Email},
 	})
 }
@@ -57,7 +61,7 @@ func GetSuperAdminStats(c *gin.Context) {
 	err := config.DB.Raw(`
 		select
 			(select count(*) from companies) as total_companies,
-			(select count(*) from companies where subscription_status = 'active') as active_companies,
+			(select count(*) from companies where subscription_status <> 'suspended') as active_companies,
 			(select count(*) from jobs) as total_jobs,
 			(select count(*) from jobs where status = 'open') as open_jobs,
 			(select count(*) from applications) as total_applications,
@@ -79,7 +83,8 @@ type companyWithStats struct {
 }
 
 func GetAllCompanies(c *gin.Context) {
-	var companies []companyWithStats
+	// Raw scans leave a nil slice when nothing matches, which would serialize as null.
+	companies := []companyWithStats{}
 	err := config.DB.Raw(`
 		select c.*,
 			(select count(*) from jobs j where j.company_id = c.id) as job_count,
@@ -92,4 +97,53 @@ func GetAllCompanies(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"companies": companies})
+}
+
+// UpdateCompanySubscription lets a super admin suspend/reactivate a company or change its plan tier.
+func UpdateCompanySubscription(c *gin.Context) {
+	id, ok := uuidParam(c, "id")
+	if !ok {
+		return
+	}
+	var req struct {
+		SubscriptionStatus *string `json:"subscription_status" binding:"omitempty,oneof=trial active suspended"`
+		SubscriptionTier   *string `json:"subscription_tier" binding:"omitempty,oneof=starter professional enterprise"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		badRequest(c, err)
+		return
+	}
+
+	var company models.Company
+	err := config.DB.First(&company, "id = ?", id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Company not found"})
+		return
+	}
+	if err != nil {
+		serverError(c, "Failed to load company")
+		return
+	}
+
+	before := map[string]string{"subscription_status": company.SubscriptionStatus, "subscription_tier": company.SubscriptionTier}
+	updates := map[string]any{}
+	if req.SubscriptionStatus != nil {
+		updates["subscription_status"] = *req.SubscriptionStatus
+	}
+	if req.SubscriptionTier != nil {
+		updates["subscription_tier"] = *req.SubscriptionTier
+	}
+	if len(updates) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Nothing to update"})
+		return
+	}
+	if err := config.DB.Model(&company).Updates(updates).Error; err != nil {
+		serverError(c, "Failed to update company")
+		return
+	}
+	middleware.ForgetCompanySessions(company.ID)
+
+	services.LogActivity(&company.ID, nil, "company_subscription_updated", "company", &company.ID,
+		"Subscription updated for "+company.CompanyName, map[string]any{"before": before, "after": updates})
+	c.JSON(http.StatusOK, gin.H{"message": "Company updated", "company": company})
 }

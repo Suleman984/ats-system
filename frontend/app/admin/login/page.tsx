@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { authAPI, errorMessage } from "@/lib/api";
+import { authAPI, errorCode, errorMessage } from "@/lib/api";
+import ResendVerification from "@/components/auth/ResendVerification";
 import { useAuthStore } from "@/lib/store";
 
 export default function LoginPage() {
@@ -14,6 +15,7 @@ export default function LoginPage() {
     password: "",
   });
   const [error, setError] = useState("");
+  const [unverified, setUnverified] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -34,10 +36,11 @@ export default function LoginPage() {
 
     try {
       const response = await authAPI.login(formData);
-      login(response.data.admin, response.data.token);
+      login(response.data.admin);
       router.push("/admin/dashboard");
     } catch (err) {
       setError(errorMessage(err, "Login failed"));
+      setUnverified(errorCode(err) === "email_unverified");
     } finally {
       setLoading(false);
     }
@@ -50,6 +53,11 @@ export default function LoginPage() {
         {error && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
             {error}
+          </div>
+        )}
+        {unverified && (
+          <div className="mb-4">
+            <ResendVerification email={formData.email} />
           </div>
         )}
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -66,7 +74,12 @@ export default function LoginPage() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-2">Password</label>
+            <div className="flex justify-between items-baseline mb-2">
+              <label className="block text-sm font-medium">Password</label>
+              <a href="/admin/forgot-password" className="text-sm text-blue-600 hover:underline">
+                Forgot password?
+              </a>
+            </div>
             <input
               type="password"
               required

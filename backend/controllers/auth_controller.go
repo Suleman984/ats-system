@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"ats-backend/config"
+	"ats-backend/middleware"
 	"ats-backend/models"
 	"ats-backend/services"
 	"ats-backend/utils"
@@ -50,6 +51,21 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	if admin.EmailVerifiedAt == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Please verify your email first. Check your inbox for the link.", "code": "email_unverified"})
+		return
+	}
+
+	var company models.Company
+	if err := config.DB.Select("subscription_status").First(&company, "id = ?", admin.CompanyID).Error; err != nil {
+		serverError(c, "Failed to load company")
+		return
+	}
+	if company.SubscriptionStatus == models.CompanySuspended {
+		c.JSON(http.StatusForbidden, gin.H{"error": "This company account has been suspended. Please contact support."})
+		return
+	}
+
 	respondWithAdminToken(c, http.StatusOK, &admin, "")
 }
 
@@ -71,7 +87,7 @@ func Register(c *gin.Context) {
 	if req.EmbedDomain != "" {
 		company.EmbedDomain = &req.EmbedDomain
 	}
-	admin := models.Admin{Name: req.Name, Email: email, PasswordHash: string(hashed), Role: "admin"}
+	admin := models.Admin{Name: req.Name, Email: email, PasswordHash: string(hashed), Role: models.RoleOwner}
 
 	err = config.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&company).Error; err != nil {
@@ -80,8 +96,10 @@ func Register(c *gin.Context) {
 		admin.CompanyID = company.ID
 		return tx.Create(&admin).Error
 	})
+	// Same response either way, so registration can't be used to discover existing accounts.
 	if errors.Is(err, gorm.ErrDuplicatedKey) {
-		c.JSON(http.StatusConflict, gin.H{"error": "An account with this email already exists"})
+		handleExistingSignup(email)
+		c.JSON(http.StatusAccepted, checkInbox)
 		return
 	}
 	if err != nil {
@@ -90,7 +108,23 @@ func Register(c *gin.Context) {
 	}
 
 	services.LogCompanyRegistered(company.ID, admin.ID, company.CompanyName, admin.Email)
-	respondWithAdminToken(c, http.StatusCreated, &admin, "Registration successful")
+	sendVerificationEmail(&admin)
+	c.JSON(http.StatusAccepted, checkInbox)
+}
+
+// Logout clears the session cookies; it needs no session so a stale cookie can always be removed.
+func Logout(c *gin.Context) {
+	middleware.ClearSessionCookie(c, middleware.AdminCookie)
+	c.JSON(http.StatusOK, gin.H{"message": "Logged out"})
+}
+
+func SuperAdminLogout(c *gin.Context) {
+	middleware.ClearSessionCookie(c, middleware.SuperAdminCookie)
+	c.JSON(http.StatusOK, gin.H{"message": "Logged out"})
+}
+
+func adminJSON(admin *models.Admin) gin.H {
+	return gin.H{"id": admin.ID, "name": admin.Name, "email": admin.Email, "company_id": admin.CompanyID, "role": admin.Role}
 }
 
 func respondWithAdminToken(c *gin.Context, status int, admin *models.Admin, message string) {
@@ -99,10 +133,8 @@ func respondWithAdminToken(c *gin.Context, status int, admin *models.Admin, mess
 		serverError(c, "Failed to generate token")
 		return
 	}
-	body := gin.H{
-		"token": token,
-		"admin": gin.H{"id": admin.ID, "name": admin.Name, "email": admin.Email, "company_id": admin.CompanyID},
-	}
+	middleware.SetSessionCookie(c, middleware.AdminCookie, token)
+	body := gin.H{"admin": adminJSON(admin)}
 	if message != "" {
 		body["message"] = message
 	}

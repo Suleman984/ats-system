@@ -6,7 +6,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Billing tables for the planned subscription plans; no handlers use them yet.
+// Billing: plans define limits, subscriptions record paid periods, payments record Safepay checkouts.
 
 type SubscriptionPlan struct {
 	ID              uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
@@ -16,7 +16,9 @@ type SubscriptionPlan struct {
 	Features        string    `gorm:"type:jsonb" json:"features"`
 	MaxJobs         int       `json:"max_jobs"`
 	MaxApplications int       `json:"max_applications"`
+	MaxAdmins       int       `json:"max_admins"`
 	AIShortlisting  bool      `json:"ai_shortlisting"`
+	PricePKR        int       `gorm:"column:price_pkr" json:"price_pkr"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }

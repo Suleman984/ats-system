@@ -34,6 +34,21 @@ func SendCandidateMessage(c *gin.Context) {
 		serverError(c, "Failed to send message")
 		return
 	}
+
+	jobTitle := app.JobTitle()
+	go func() {
+		var admins []models.Admin
+		if err := config.DB.Select("email").Where("company_id = ?", app.CompanyID).Find(&admins).Error; err != nil {
+			log.Printf("load admins to notify for application %s: %v", app.ID, err)
+			return
+		}
+		for _, admin := range admins {
+			if err := services.SendCandidateReplyEmail(admin.Email, app.FullName, jobTitle, req.Message); err != nil {
+				log.Printf("candidate reply email for application %s: %v", app.ID, err)
+			}
+		}
+	}()
+
 	c.JSON(http.StatusCreated, gin.H{"message": "Message sent successfully", "data": msg})
 }
 
@@ -74,7 +89,7 @@ func SendRecruiterMessage(c *gin.Context) {
 
 	jobTitle := app.JobTitle()
 	go func() {
-		if err := services.SendNewMessageEmail(app.Email, app.FullName, jobTitle, req.Message); err != nil {
+		if err := services.SendNewMessageEmail(app.Email, app.FullName, jobTitle, app.ID.String(), req.Message); err != nil {
 			log.Printf("message email for application %s: %v", app.ID, err)
 		}
 		sms := "Hi " + app.FullName + ", you have a new message about your application for " + jobTitle + ". Check your email or application portal."
@@ -86,17 +101,21 @@ func SendRecruiterMessage(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"message": "Message sent successfully", "data": msg})
 }
 
+// GetCandidateMessages takes credentials in the body so the email never lands in URLs or logs.
 func GetCandidateMessages(c *gin.Context) {
-	id, err := uuid.Parse(c.Query("application_id"))
-	if err != nil || c.Query("email") == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "application_id and email are required"})
+	var req struct {
+		Email         string    `json:"email" binding:"required,email"`
+		ApplicationID uuid.UUID `json:"application_id" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		badRequest(c, err)
 		return
 	}
-	app, ok := findCandidateApplication(c, id, c.Query("email"))
+	app, ok := findCandidateApplication(c, req.ApplicationID, req.Email)
 	if !ok {
 		return
 	}
-	respondWithThread(c, app.ID, models.SenderRecruiter)
+	respondWithThread(c, app.ID, models.SenderRecruiter, true)
 }
 
 func GetRecruiterMessages(c *gin.Context) {
@@ -108,11 +127,12 @@ func GetRecruiterMessages(c *gin.Context) {
 	if !ok {
 		return
 	}
-	respondWithThread(c, app.ID, models.SenderCandidate)
+	respondWithThread(c, app.ID, models.SenderCandidate, false)
 }
 
 // respondWithThread returns the conversation and marks the other side's messages read.
-func respondWithThread(c *gin.Context, applicationID uuid.UUID, markReadFrom string) {
+// forCandidate hides which recruiter wrote each message.
+func respondWithThread(c *gin.Context, applicationID uuid.UUID, markReadFrom string, forCandidate bool) {
 	var messages []models.Message
 	if err := config.DB.Where("application_id = ?", applicationID).Order("created_at asc").Find(&messages).Error; err != nil {
 		serverError(c, "Failed to fetch messages")
@@ -127,6 +147,9 @@ func respondWithThread(c *gin.Context, applicationID uuid.UUID, markReadFrom str
 	for i := range messages {
 		if messages[i].SenderType == markReadFrom && !messages[i].IsRead {
 			messages[i].IsRead, messages[i].ReadAt = true, &now
+		}
+		if forCandidate && messages[i].SenderType == models.SenderRecruiter {
+			messages[i].SenderID, messages[i].SenderEmail = nil, ""
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"messages": messages, "count": len(messages)})

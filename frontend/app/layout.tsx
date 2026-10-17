@@ -4,6 +4,7 @@ import ModeIndicator from "@/components/ModeIndicator";
 import ToastContainer from "@/components/Toast";
 
 export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_FRONTEND_URL || "http://localhost:3000"),
   title: "ATS Platform - Applicant Tracking System",
   description: "Simplify your hiring process with our ATS platform",
 };

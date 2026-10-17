@@ -1,11 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { jobAPI, Job, errorMessage } from "@/lib/api";
+import { jobAPI, Job, errorMessage, formatDateOnly } from "@/lib/api";
 import Link from "next/link";
 import { toast } from "@/components/Toast";
+import { useDashboardHref, useIsOwner } from "@/lib/dashboard-path";
 
 export default function JobsPage() {
+  const href = useDashboardHref();
+  const isOwner = useIsOwner();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState("");
@@ -61,7 +64,7 @@ export default function JobsPage() {
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-3xl font-bold">Jobs</h1>
           <Link
-            href="/admin/dashboard/jobs/create"
+            href={href("/admin/dashboard/jobs/create")}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
           >
             Post New Job
@@ -133,7 +136,7 @@ export default function JobsPage() {
                         : "N/A"}
                     </td>
                     <td className="px-6 py-4 text-sm">
-                      {new Date(job.deadline).toLocaleDateString()}
+                      {formatDateOnly(job.deadline)}
                     </td>
                     <td className="px-6 py-4">
                       <span
@@ -151,7 +154,7 @@ export default function JobsPage() {
                     <td className="px-6 py-4">
                       <div className="flex gap-2 flex-wrap">
                         <Link
-                          href={`/admin/dashboard/jobs/${job.id}/edit`}
+                          href={href(`/admin/dashboard/jobs/${job.id}/edit`)}
                           className="text-blue-600 hover:underline text-sm"
                         >
                           Edit
@@ -166,12 +169,14 @@ export default function JobsPage() {
                         >
                           {job.status === "open" ? "Close" : "Reopen"}
                         </button>
-                        <button
-                          onClick={() => handleDelete(job.id)}
-                          className="text-red-600 hover:underline text-sm"
-                        >
-                          Delete
-                        </button>
+                        {isOwner && (
+                          <button
+                            onClick={() => handleDelete(job.id)}
+                            className="text-red-600 hover:underline text-sm"
+                          >
+                            Delete
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

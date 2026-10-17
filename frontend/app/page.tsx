@@ -24,6 +24,12 @@ export default function HomePage() {
                 Start Free Trial
               </Link>
               <Link
+                href="/admin/login"
+                className="px-8 py-3 border-2 border-white rounded-lg font-semibold hover:bg-white hover:text-blue-600"
+              >
+                Log In
+              </Link>
+              <Link
                 href="#features"
                 className="px-8 py-3 border-2 border-white rounded-lg font-semibold hover:bg-white hover:text-blue-600"
               >

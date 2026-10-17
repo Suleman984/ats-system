@@ -7,10 +7,14 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"unicode"
 
+	"ats-backend/config"
+	"ats-backend/models"
 	"ats-backend/services"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 const maxUploadSize = 10 << 20
@@ -39,15 +43,16 @@ var (
 )
 
 func UploadCV(c *gin.Context) {
-	handleUpload(c, "resumes", cvTypes, "PDF, DOC or DOCX")
+	handleUpload(c, models.UploadResume, services.BucketResumes, cvTypes, "PDF, DOC or DOCX")
 }
 
 func UploadPortfolio(c *gin.Context) {
-	handleUpload(c, "portfolios", portfolioTypes, "PDF, ZIP, RAR or 7Z")
+	handleUpload(c, models.UploadPortfolio, services.BucketPortfolios, portfolioTypes, "PDF, ZIP, RAR or 7Z")
 }
 
-// handleUpload checks extension and file signature before storing the file.
-func handleUpload(c *gin.Context, bucket string, allowed map[string]fileKind, allowedLabel string) {
+// handleUpload checks extension and file signature, stores the file privately under a random name
+// and returns an upload ID (never a URL). An application must claim the ID within 24 hours.
+func handleUpload(c *gin.Context, kind, bucket string, allowed map[string]fileKind, allowedLabel string) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUploadSize+1<<20)
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
@@ -57,7 +62,7 @@ func handleUpload(c *gin.Context, bucket string, allowed map[string]fileKind, al
 	defer file.Close()
 
 	ext := strings.ToLower(filepath.Ext(header.Filename))
-	kind, ok := allowed[ext]
+	fk, ok := allowed[ext]
 	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid file type. Allowed: " + allowedLabel})
 		return
@@ -68,16 +73,50 @@ func handleUpload(c *gin.Context, bucket string, allowed map[string]fileKind, al
 		c.JSON(http.StatusBadRequest, gin.H{"error": "File exceeds the 10 MB limit"})
 		return
 	}
-	if !bytes.HasPrefix(data, kind.magic) {
+	if len(data) == 0 || !bytes.HasPrefix(data, fk.magic) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "File content does not match its extension"})
 		return
 	}
 
-	fileURL, err := services.UploadFile(data, ext, kind.contentType, bucket)
-	if err != nil {
+	object := uuid.NewString() + ext
+	if err := services.PutObject(bucket, object, data, fk.contentType); err != nil {
 		log.Printf("upload to %s: %v", bucket, err)
 		serverError(c, "Failed to upload file")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "File uploaded successfully", "file_url": fileURL})
+	upload := models.Upload{
+		Kind: kind, ObjectPath: object, ContentType: fk.contentType,
+		SizeBytes: len(data), OriginalName: safeFileName(header.Filename),
+	}
+	if err := config.DB.Create(&upload).Error; err != nil {
+		go services.DeleteObjects(bucket, []string{object})
+		serverError(c, "Failed to upload file")
+		return
+	}
+
+	// Parse the CV now, while it's in memory, so submitting doesn't have to download it again.
+	if kind == models.UploadResume {
+		go func() {
+			if text, err := services.ExtractTextFromBytes(data, fk.contentType, object); err == nil {
+				config.DB.Model(&upload).Update("parsed_text", text)
+			}
+		}()
+	}
+
+	c.JSON(http.StatusCreated, gin.H{"upload_id": upload.ID, "file_name": upload.OriginalName, "size": upload.SizeBytes})
+}
+
+// safeFileName keeps a display-only name: no path, no control characters, bounded length.
+func safeFileName(name string) string {
+	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
+	name = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == '"' {
+			return -1
+		}
+		return r
+	}, name)
+	if runes := []rune(name); len(runes) > 200 {
+		name = string(runes[len(runes)-200:])
+	}
+	return name
 }

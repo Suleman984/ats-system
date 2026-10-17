@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   applicationAPI,
   jobAPI,
@@ -16,9 +17,31 @@ import { toast } from "@/components/Toast";
 import NotesModal from "@/components/applications/NotesModal";
 import TimelineModal from "@/components/applications/TimelineModal";
 import ReferralModal from "@/components/applications/ReferralModal";
+import MessagesModal from "@/components/applications/MessagesModal";
+import AnalysisModal, { parseAnalysis } from "@/components/applications/AnalysisModal";
+import { APPLICATION_STATUSES, NEXT_STAGE_ACTION, isUndecided, statusBadge, statusLabel } from "@/lib/status";
+import { useDashboardHref, useIsOwner } from "@/lib/dashboard-path";
+import Link from "next/link";
+import FileLink from "@/components/applications/FileLink";
+import { notifyUnreadChanged, useUnreadSummary } from "@/lib/unread";
 
-export default function ApplicationsPage() {
+const PAGE_SIZE = 50;
+
+function Applications() {
+  const href = useDashboardHref();
+  // The nav bell links here with ?unread=1.
+  const unreadParam = useSearchParams().get("unread") === "1";
+  const [unreadOnly, setUnreadOnly] = useState(unreadParam);
+  const [seenUnreadParam, setSeenUnreadParam] = useState(unreadParam);
+  if (seenUnreadParam !== unreadParam) {
+    setSeenUnreadParam(unreadParam);
+    setUnreadOnly(unreadParam);
+  }
+  const unreadSummary = useUnreadSummary();
+  const isOwner = useIsOwner();
   const [applications, setApplications] = useState<Application[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedJob, setSelectedJob] = useState("");
   const [selectedStatus, setSelectedStatus] = useState("");
@@ -38,6 +61,9 @@ export default function ApplicationsPage() {
   const [showNotesModal, setShowNotesModal] = useState(false);
   const [showTimelineModal, setShowTimelineModal] = useState(false);
   const [showReferralModal, setShowReferralModal] = useState(false);
+  const [showMessagesModal, setShowMessagesModal] = useState(false);
+  const [analysisApp, setAnalysisApp] = useState<Application | null>(null);
+  const [batchScoring, setBatchScoring] = useState(false);
 
   const fetchData = useCallback(async () => {
     const params = Object.fromEntries(
@@ -46,18 +72,20 @@ export default function ApplicationsPage() {
         status: selectedStatus,
         date_from: dateFrom,
         date_to: dateTo,
+        unread: unreadOnly,
       }).filter(([, value]) => value)
     );
     try {
-      const { data } = await applicationAPI.getAll(params);
+      const { data } = await applicationAPI.getAll({ ...params, limit: PAGE_SIZE });
       setApplications(data.applications);
+      setTotal(data.total);
     } catch (error) {
       toast.error(errorMessage(error, "Failed to fetch applications"));
     } finally {
       setLoading(false);
       setIsFiltering(false);
     }
-  }, [selectedJob, selectedStatus, dateFrom, dateTo]);
+  }, [selectedJob, selectedStatus, dateFrom, dateTo, unreadOnly]);
 
   useEffect(() => {
     jobAPI
@@ -76,11 +104,40 @@ export default function ApplicationsPage() {
     return () => clearTimeout(timeoutId);
   }, [fetchData]);
 
+  const loadMore = async () => {
+    setLoadingMore(true);
+    try {
+      const { data } = await applicationAPI.getAll({
+        ...Object.fromEntries(
+          Object.entries({
+            job_id: selectedJob,
+            status: selectedStatus,
+            date_from: dateFrom,
+            date_to: dateTo,
+            unread: unreadOnly,
+          }).filter(([, value]) => value)
+        ),
+        limit: PAGE_SIZE,
+        offset: applications.length,
+      });
+      // Skip rows already shown in case new applications shifted the offset.
+      setApplications((prev) => {
+        const seen = new Set(prev.map((a) => a.id));
+        return [...prev, ...data.applications.filter((a) => !seen.has(a.id))];
+      });
+      setTotal(data.total);
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to load more applications"));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   const handleShortlist = async (id: string) => {
     if (!window.confirm("Shortlist this candidate?")) return;
     try {
       await applicationAPI.shortlist(id);
-      toast.success("Candidate shortlisted! Email sent.");
+      toast.success("Candidate shortlisted. They'll be notified by email.");
       fetchData();
     } catch (error) {
       toast.error(errorMessage(error, "Failed to shortlist candidate"));
@@ -91,10 +148,52 @@ export default function ApplicationsPage() {
     if (!window.confirm("Reject this candidate?")) return;
     try {
       await applicationAPI.reject(id);
-      toast.success("Candidate rejected. Email sent.");
+      toast.success("Candidate rejected. They'll be notified by email.");
       fetchData();
     } catch (error) {
       toast.error(errorMessage(error, "Failed to reject candidate"));
+    }
+  };
+
+  const handleAdvance = async (app: Application) => {
+    const action = NEXT_STAGE_ACTION[app.status];
+    if (!window.confirm(`${action} for ${app.full_name}? They'll be notified by email.`)) return;
+    try {
+      await applicationAPI.advance(app.id);
+      toast.success(`${app.full_name}: ${action.toLowerCase()} done`);
+      fetchData();
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to update application"));
+    }
+  };
+
+  const handleReopen = async (id: string) => {
+    if (!window.confirm("Move this candidate back to review? They won't be notified.")) return;
+    try {
+      await applicationAPI.reopen(id);
+      toast.success("Application moved back to review");
+      fetchData();
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to reopen application"));
+    }
+  };
+
+  const handleBatchScore = async () => {
+    const job = jobs.find((j) => j.id === selectedJob);
+    if (!job) return;
+    setBatchScoring(true);
+    try {
+      const { data } = await aiShortlistAPI.analyzeBatch({ job_id: job.id });
+      const failed = data.results.filter((r) => r.error).length;
+      toast.success(
+        `Scored ${data.total_analyzed - failed} of ${data.total_analyzed} undecided application(s) for ${job.title}` +
+          (failed ? ` — ${failed} CV(s) couldn't be read` : "")
+      );
+      fetchData();
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to score applications"));
+    } finally {
+      setBatchScoring(false);
     }
   };
 
@@ -117,22 +216,19 @@ export default function ApplicationsPage() {
   };
 
   const handleBulkDelete = async (status: string) => {
-    const statusLabels: { [key: string]: string } = {
-      pending: "pending",
-      shortlisted: "shortlisted",
-      rejected: "rejected",
-    };
-    const label = statusLabels[status] || status;
+    const label = statusLabel(status).toLowerCase();
+    const jobTitle = jobs.find((j) => j.id === selectedJob)?.title;
+    const scope = jobTitle ? ` for "${jobTitle}"` : " across all jobs";
 
     if (
       !window.confirm(
-        `Are you sure you want to delete ALL ${label} applications? This action cannot be undone.`
+        `Are you sure you want to delete ALL ${label} applications${scope}? This action cannot be undone.`
       )
     )
       return;
 
     try {
-      const response = await applicationAPI.bulkDelete(status);
+      const response = await applicationAPI.bulkDelete(status, selectedJob);
       toast.success(
         response.data.message ||
           `Deleted ${response.data.deleted_count} ${label} application(s)`
@@ -233,9 +329,17 @@ export default function ApplicationsPage() {
       <div className="max-w-7xl mx-auto">
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-3xl font-bold">Applications</h1>
-          {isFiltering && (
-            <div className="text-sm text-gray-500">Filtering...</div>
-          )}
+          <div className="flex items-center gap-4">
+            {isFiltering && (
+              <div className="text-sm text-gray-500">Filtering...</div>
+            )}
+            <Link
+              href={href("/admin/dashboard/applications/manual-add")}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+            >
+              + Add candidate
+            </Link>
+          </div>
         </div>
 
         {/* Filters */}
@@ -254,6 +358,7 @@ export default function ApplicationsPage() {
                 {jobs.map((job) => (
                   <option key={job.id} value={job.id}>
                     {job.title}
+                    {unreadSummary.byJob[job.id] ? ` (${unreadSummary.byJob[job.id]} new)` : ""}
                   </option>
                 ))}
               </select>
@@ -268,9 +373,11 @@ export default function ApplicationsPage() {
                 onChange={(e) => setSelectedStatus(e.target.value)}
               >
                 <option value="">All Status</option>
-                <option value="pending">Pending</option>
-                <option value="shortlisted">Shortlisted</option>
-                <option value="rejected">Rejected</option>
+                {APPLICATION_STATUSES.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.label}
+                  </option>
+                ))}
               </select>
             </div>
             <div>
@@ -294,46 +401,62 @@ export default function ApplicationsPage() {
               />
             </div>
           </div>
-          {(dateFrom || dateTo) && (
-            <div className="flex justify-end">
+          <div className="flex justify-between items-center gap-4">
+            {selectedJob ? (
+              <button
+                onClick={handleBatchScore}
+                disabled={batchScoring}
+                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-blue-300"
+              >
+                {batchScoring ? "Scoring CVs..." : "🔍 Score all undecided CVs for this job"}
+              </button>
+            ) : (
+              <span className="text-xs text-gray-500">Select a job to score all its CVs at once.</span>
+            )}
+            <label className="flex items-center gap-2 text-sm text-gray-700 ml-auto">
+              <input
+                type="checkbox"
+                checked={unreadOnly}
+                onChange={(e) => setUnreadOnly(e.target.checked)}
+              />
+              Unread messages only
+              {unreadSummary.total > 0 && (
+                <span className="px-1.5 rounded-full bg-red-600 text-white text-xs">{unreadSummary.total}</span>
+              )}
+            </label>
+            {(dateFrom || dateTo) && (
               <button
                 onClick={clearDateFilters}
                 className="text-sm text-blue-600 hover:underline"
               >
                 Clear Date Filters
               </button>
-            </div>
-          )}
+            )}
+          </div>
 
-          {/* Bulk Delete Actions */}
+          {/* Bulk Delete Actions (owners only; the API enforces this too) */}
+          {isOwner && (
           <div className="mt-4 pt-4 border-t">
             <label className="block text-sm font-medium mb-2 text-gray-700">
               Bulk Delete by Status
+              {selectedJob ? " (selected job only)" : " (all jobs)"}
             </label>
             <div className="flex gap-2 flex-wrap">
-              <button
-                onClick={() => handleBulkDelete("pending")}
-                className="px-3 py-1.5 text-xs bg-yellow-100 text-yellow-800 rounded hover:bg-yellow-200 transition-colors"
-              >
-                Delete All Pending
-              </button>
-              <button
-                onClick={() => handleBulkDelete("shortlisted")}
-                className="px-3 py-1.5 text-xs bg-green-100 text-green-800 rounded hover:bg-green-200 transition-colors"
-              >
-                Delete All Shortlisted
-              </button>
-              <button
-                onClick={() => handleBulkDelete("rejected")}
-                className="px-3 py-1.5 text-xs bg-red-100 text-red-800 rounded hover:bg-red-200 transition-colors"
-              >
-                Delete All Rejected
-              </button>
+              {APPLICATION_STATUSES.map((s) => (
+                <button
+                  key={s.value}
+                  onClick={() => handleBulkDelete(s.value)}
+                  className={`px-3 py-1.5 text-xs rounded hover:opacity-80 transition-opacity ${s.badge}`}
+                >
+                  Delete All {s.label}
+                </button>
+              ))}
             </div>
             <p className="text-xs text-gray-500 mt-2">
               ⚠️ Warning: Bulk delete actions cannot be undone
             </p>
           </div>
+          )}
         </div>
 
         {/* Applications List */}
@@ -388,7 +511,21 @@ export default function ApplicationsPage() {
                     <tr key={app.id} className="hover:bg-gray-50">
                       <td className="px-6 py-4">
                         <div>
-                          <p className="font-semibold">{app.full_name}</p>
+                          <p className="font-semibold flex items-center gap-2">
+                            {app.full_name}
+                            {!!app.unread_messages && (
+                              <button
+                                onClick={() => {
+                                  setSelectedAppForDetails(app.id);
+                                  setShowMessagesModal(true);
+                                }}
+                                title="Unread messages from this candidate"
+                                className="px-1.5 py-0.5 rounded-full bg-red-600 text-white text-xs font-medium hover:bg-red-700"
+                              >
+                                💬 {app.unread_messages}
+                              </button>
+                            )}
+                          </p>
                           <p className="text-sm text-gray-500">{app.email}</p>
                           <p className="text-sm text-gray-500">{app.phone}</p>
                         </div>
@@ -426,29 +563,7 @@ export default function ApplicationsPage() {
                             </span>
                             {app.analysis_result && (
                               <button
-                                onClick={() => {
-                                  const analysis =
-                                    typeof app.analysis_result === "string"
-                                      ? JSON.parse(app.analysis_result)
-                                      : app.analysis_result;
-                                  const analysisText = `AI Analysis:\n\nMatch Score: ${
-                                    analysis.match_score
-                                  }%\n\nSkills: ${
-                                    analysis.skills?.join(", ") || "N/A"
-                                  }\nExperience: ${
-                                    analysis.experience
-                                  } years\nLanguages: ${
-                                    analysis.languages?.join(", ") || "N/A"
-                                  }\n\nStrengths:\n${
-                                    analysis.strengths?.join("\n") || "N/A"
-                                  }\n\nMissing Skills:\n${
-                                    analysis.missing_skills?.join("\n") ||
-                                    "None"
-                                  }\n\nReason: ${
-                                    analysis.match_reason || "N/A"
-                                  }`;
-                                  toast.info(analysisText.split("\n\n")[0]);
-                                }}
+                                onClick={() => setAnalysisApp(app)}
                                 className="text-xs text-blue-600 cursor-pointer hover:underline"
                                 title="View AI Analysis Details"
                               >
@@ -469,15 +584,9 @@ export default function ApplicationsPage() {
                       </td>
                       <td className="px-6 py-4">
                         <span
-                          className={`px-2 py-1 rounded-full text-xs ${
-                            app.status === "shortlisted"
-                              ? "bg-green-100 text-green-800"
-                              : app.status === "rejected"
-                              ? "bg-red-100 text-red-800"
-                              : "bg-yellow-100 text-yellow-800"
-                          }`}
+                          className={`px-2 py-1 rounded-full text-xs ${statusBadge(app.status)}`}
                         >
-                          {app.status}
+                          {statusLabel(app.status)}
                         </span>
                       </td>
                       <td className="px-6 py-4 relative">
@@ -502,11 +611,12 @@ export default function ApplicationsPage() {
                               ></div>
                               {/* Dropdown menu */}
                               <div className="absolute right-0 top-full mt-1 w-36 bg-white rounded-md shadow-2xl z-200 border border-gray-300 py-1.5">
-                                <a
-                                  href={app.resume_url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  onClick={async () => {
+                                <FileLink
+                                  applicationId={app.id}
+                                  kind="resume"
+                                  url={app.resume_url}
+                                  hasFile={app.has_resume_file}
+                                  onOpen={async () => {
                                     setOpenDropdown(null);
                                     try {
                                       await applicationAPI.trackCVView(app.id);
@@ -515,21 +625,20 @@ export default function ApplicationsPage() {
                                       toast.error(errorMessage(error, "Failed to track CV view"));
                                     }
                                   }}
-                                  className="block px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 transition-colors"
+                                  className="block w-full px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 transition-colors"
                                 >
                                   📄 View CV
-                                </a>
-                                {app.portfolio_url && (
-                                  <a
-                                    href={app.portfolio_url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    onClick={() => setOpenDropdown(null)}
-                                    className="block px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 transition-colors"
-                                  >
-                                    🎨 Portfolio
-                                  </a>
-                                )}
+                                </FileLink>
+                                <FileLink
+                                  applicationId={app.id}
+                                  kind="portfolio"
+                                  url={app.portfolio_url}
+                                  hasFile={app.has_portfolio_file}
+                                  onOpen={() => setOpenDropdown(null)}
+                                  className="block w-full px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 transition-colors"
+                                >
+                                  🎨 Portfolio
+                                </FileLink>
                                 {app.linkedin_url && (
                                   <a
                                     href={app.linkedin_url}
@@ -563,30 +672,53 @@ export default function ApplicationsPage() {
                                     "🔍 Analyze CV"
                                   )}
                                 </button>
-                                {(app.status === "pending" ||
-                                  app.status === "cv_viewed") && (
-                                  <>
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleShortlist(app.id);
-                                        setOpenDropdown(null);
-                                      }}
-                                      className="block w-full text-left px-3 py-1.5 text-xs text-green-600 hover:bg-gray-50 transition-colors"
-                                    >
-                                      ✓ Shortlist
-                                    </button>
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleReject(app.id);
-                                        setOpenDropdown(null);
-                                      }}
-                                      className="block w-full text-left px-3 py-1.5 text-xs text-red-600 hover:bg-gray-50 transition-colors"
-                                    >
-                                      ✗ Reject
-                                    </button>
-                                  </>
+                                {isUndecided(app.status) && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleShortlist(app.id);
+                                      setOpenDropdown(null);
+                                    }}
+                                    className="block w-full text-left px-3 py-1.5 text-xs text-green-600 hover:bg-gray-50 transition-colors"
+                                  >
+                                    ✓ Shortlist
+                                  </button>
+                                )}
+                                {NEXT_STAGE_ACTION[app.status] && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleAdvance(app);
+                                      setOpenDropdown(null);
+                                    }}
+                                    className="block w-full text-left px-3 py-1.5 text-xs text-green-600 hover:bg-gray-50 transition-colors"
+                                  >
+                                    → {NEXT_STAGE_ACTION[app.status]}
+                                  </button>
+                                )}
+                                {app.status !== "rejected" && app.status !== "hired" && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleReject(app.id);
+                                      setOpenDropdown(null);
+                                    }}
+                                    className="block w-full text-left px-3 py-1.5 text-xs text-red-600 hover:bg-gray-50 transition-colors"
+                                  >
+                                    ✗ Reject
+                                  </button>
+                                )}
+                                {!isUndecided(app.status) && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleReopen(app.id);
+                                      setOpenDropdown(null);
+                                    }}
+                                    className="block w-full text-left px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 transition-colors"
+                                  >
+                                    ↺ Move back to review
+                                  </button>
                                 )}
                                 <div className="border-t border-gray-200 my-1"></div>
                                 <button
@@ -612,6 +744,17 @@ export default function ApplicationsPage() {
                                   className="block w-full text-left px-3 py-1.5 text-xs text-blue-600 hover:bg-gray-50 transition-colors"
                                 >
                                   📅 Timeline
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedAppForDetails(app.id);
+                                    setShowMessagesModal(true);
+                                    setOpenDropdown(null);
+                                  }}
+                                  className="block w-full text-left px-3 py-1.5 text-xs text-blue-600 hover:bg-gray-50 transition-colors"
+                                >
+                                  💬 Messages
                                 </button>
                                 <button
                                   onClick={(e) => {
@@ -690,6 +833,22 @@ export default function ApplicationsPage() {
             </div>
           )}
         </div>
+        {applications.length > 0 && (
+          <div className="flex items-center justify-between mt-4 text-sm text-gray-600">
+            <span>
+              Showing {applications.length} of {total}
+            </span>
+            {applications.length < total && (
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="px-4 py-2 bg-white border rounded-lg hover:bg-gray-50 disabled:opacity-50"
+              >
+                {loadingMore ? "Loading..." : "Load more"}
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Notes Modal */}
@@ -720,6 +879,34 @@ export default function ApplicationsPage() {
         />
       )}
 
+      {/* Analysis Modal */}
+      {analysisApp && (
+        <AnalysisModal
+          candidateName={analysisApp.full_name}
+          analysis={parseAnalysis(analysisApp.analysis_result)}
+          onClose={() => setAnalysisApp(null)}
+        />
+      )}
+
+      {/* Messages Modal */}
+      {showMessagesModal && selectedAppForDetails && (
+        <MessagesModal
+          applicationId={selectedAppForDetails}
+          candidateName={
+            applications.find((a) => a.id === selectedAppForDetails)?.full_name
+          }
+          onClose={() => {
+            // Opening the thread marked the candidate's messages read on the server.
+            setApplications((prev) =>
+              prev.map((a) => (a.id === selectedAppForDetails ? { ...a, unread_messages: 0 } : a))
+            );
+            notifyUnreadChanged();
+            setShowMessagesModal(false);
+            setSelectedAppForDetails(null);
+          }}
+        />
+      )}
+
       {/* Referral Modal */}
       {showReferralModal && selectedAppForDetails && (
         <ReferralModal
@@ -736,5 +923,14 @@ export default function ApplicationsPage() {
         />
       )}
     </div>
+  );
+}
+
+// useSearchParams needs a Suspense boundary so the page can prerender.
+export default function ApplicationsPage() {
+  return (
+    <Suspense>
+      <Applications />
+    </Suspense>
   );
 }

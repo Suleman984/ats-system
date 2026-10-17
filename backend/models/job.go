@@ -82,6 +82,12 @@ type Job struct {
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
+// Today is the current UTC calendar date at midnight, comparable with DateOnly values.
+func Today() time.Time {
+	now := time.Now().UTC()
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+}
+
 // Closed reports whether the job no longer accepts applications.
 func (j *Job) Closed(now time.Time) bool {
 	return j.Status != "open" || !now.Before(j.Deadline.AddDate(0, 0, 1))

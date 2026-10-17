@@ -1,9 +1,10 @@
 "use client";
 
-import { useAuthStore } from "@/lib/store";
+import { refreshAdmin, useAuthStore } from "@/lib/store";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
+import UnreadBell from "@/components/UnreadBell";
 
 // Embedded layout - minimal styling for iframe integration
 function EmbeddedDashboardShell({
@@ -24,7 +25,18 @@ function EmbeddedDashboardShell({
   useEffect(() => {
     setMounted(true);
     checkAuth();
+    refreshAdmin().catch(() => undefined);
   }, [checkAuth]);
+
+  const navItems = [
+    ["Dashboard", "/embed/dashboard"],
+    ["Jobs", "/embed/dashboard/jobs"],
+    ["Applications", "/embed/dashboard/applications"],
+    ["Find Candidates", "/embed/dashboard/find-candidates"],
+    ["Talent Pool", "/embed/dashboard/talent-pool"],
+    ["Activity", "/embed/dashboard/activity-logs"],
+    ...(user?.role === "owner" ? [["Team", "/embed/dashboard/team"]] : []),
+  ];
 
   useEffect(() => {
     if (mounted && initialized && !isAuthenticated) {
@@ -64,20 +76,16 @@ function EmbeddedDashboardShell({
                 {user?.name || "ATS Dashboard"}
               </span>
               {/* Desktop Navigation */}
-              <div className="hidden md:flex md:ml-6 md:space-x-3">
-                <NavLink href={getUrlWithCompanyId("/embed/dashboard")}>
-                  Dashboard
-                </NavLink>
-                <NavLink href={getUrlWithCompanyId("/embed/dashboard/jobs")}>
-                  Jobs
-                </NavLink>
-                <NavLink
-                  href={getUrlWithCompanyId("/embed/dashboard/applications")}
-                >
-                  Applications
-                </NavLink>
+              <div className="hidden md:flex md:ml-6 md:space-x-3 overflow-x-auto">
+                {navItems.map(([label, path]) => (
+                  <NavLink key={path} href={getUrlWithCompanyId(path)}>
+                    {label}
+                  </NavLink>
+                ))}
               </div>
             </div>
+            <div className="flex items-center gap-2">
+              <UnreadBell />
             {/* Desktop Logout */}
             <div className="hidden md:block">
               <button
@@ -125,30 +133,22 @@ function EmbeddedDashboardShell({
                 )}
               </button>
             </div>
+            </div>
           </div>
         </div>
         {/* Mobile Menu */}
         {mobileMenuOpen && (
           <div className="md:hidden border-t border-gray-200">
             <div className="px-2 pt-2 pb-3 space-y-1">
-              <MobileNavLink
-                href={getUrlWithCompanyId("/embed/dashboard")}
-                onClick={() => setMobileMenuOpen(false)}
-              >
-                Dashboard
-              </MobileNavLink>
-              <MobileNavLink
-                href={getUrlWithCompanyId("/embed/dashboard/jobs")}
-                onClick={() => setMobileMenuOpen(false)}
-              >
-                Jobs
-              </MobileNavLink>
-              <MobileNavLink
-                href={getUrlWithCompanyId("/embed/dashboard/applications")}
-                onClick={() => setMobileMenuOpen(false)}
-              >
-                Applications
-              </MobileNavLink>
+              {navItems.map(([label, path]) => (
+                <MobileNavLink
+                  key={path}
+                  href={getUrlWithCompanyId(path)}
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  {label}
+                </MobileNavLink>
+              ))}
               <div className="pt-4 border-t border-gray-200">
                 <button
                   onClick={() => {
