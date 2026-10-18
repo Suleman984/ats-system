@@ -39,8 +39,9 @@ export default function MessageThread({
         ) : messages.length === 0 ? (
           <p className="text-gray-500 text-center py-8">No messages yet</p>
         ) : (
-          messages.map((msg) => {
+          messages.map((msg, i) => {
             const mine = msg.sender_type === viewer;
+            const lastMine = mine && !messages.slice(i + 1).some((m) => m.sender_type === viewer);
             return (
               <div
                 key={msg.id}
@@ -59,6 +60,7 @@ export default function MessageThread({
                   >
                     {msg.sender_type === "recruiter" ? "Recruiter" : "Candidate"} ·{" "}
                     {new Date(msg.created_at).toLocaleString()}
+                    {lastMine && msg.is_read && " · Seen"}
                   </p>
                 </div>
               </div>

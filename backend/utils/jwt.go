@@ -12,7 +12,10 @@ import (
 const (
 	audienceAdmin      = "admin"
 	audienceSuperAdmin = "super_admin"
-	tokenTTL           = 24 * time.Hour
+	// Candidate chat streams: scoped to one application, short-lived because it travels in a URL.
+	audienceCandidateStream = "candidate_stream"
+	candidateStreamTTL      = time.Hour
+	tokenTTL                = 24 * time.Hour
 )
 
 type Claims struct {
@@ -85,7 +88,30 @@ func VerifySuperAdminJWT(token string) (uuid.UUID, error) {
 	return id, nil
 }
 
+func GenerateCandidateStreamToken(applicationID, companyID uuid.UUID) (string, error) {
+	return signWithTTL(applicationID, audienceCandidateStream, companyID.String(), candidateStreamTTL)
+}
+
+// VerifyCandidateStreamToken returns the application and company a stream token was issued for.
+func VerifyCandidateStreamToken(token string) (applicationID, companyID uuid.UUID, err error) {
+	claims, err := parse(token, audienceCandidateStream)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	if applicationID, err = uuid.Parse(claims.Subject); err != nil {
+		return uuid.Nil, uuid.Nil, errors.New("invalid subject")
+	}
+	if companyID, err = uuid.Parse(claims.CompanyID); err != nil {
+		return uuid.Nil, uuid.Nil, errors.New("invalid company")
+	}
+	return applicationID, companyID, nil
+}
+
 func sign(subject uuid.UUID, audience, companyID string) (string, error) {
+	return signWithTTL(subject, audience, companyID, tokenTTL)
+}
+
+func signWithTTL(subject uuid.UUID, audience, companyID string, ttl time.Duration) (string, error) {
 	now := time.Now()
 	claims := Claims{
 		CompanyID: companyID,
@@ -93,7 +119,7 @@ func sign(subject uuid.UUID, audience, companyID string) (string, error) {
 			Subject:   subject.String(),
 			Audience:  jwt.ClaimStrings{audience},
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(tokenTTL)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(ttl)),
 		},
 	}
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(jwtSecret)

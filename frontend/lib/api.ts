@@ -1,6 +1,6 @@
 import axios, { isAxiosError } from "axios";
 
-const API_BASE_URL =
+export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
 
 // The session lives in an HttpOnly cookie, so requests just need credentials. The client header
@@ -567,6 +567,11 @@ export const candidatePortalAPI = {
         message: message,
       }
     ),
+  streamToken: (applicationId: string, email: string) =>
+    publicApi.post<{ token: string }>("/candidate/stream-token", {
+      application_id: applicationId,
+      email,
+    }),
   getMessages: (applicationId: string, email: string) =>
     publicApi.post<{ messages: Message[]; count: number }>(
       "/candidate/messages",

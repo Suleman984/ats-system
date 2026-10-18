@@ -24,6 +24,7 @@ import { useDashboardHref, useIsOwner } from "@/lib/dashboard-path";
 import Link from "next/link";
 import FileLink from "@/components/applications/FileLink";
 import { notifyUnreadChanged, useUnreadSummary } from "@/lib/unread";
+import { useChatEvents } from "@/lib/realtime";
 
 const PAGE_SIZE = 50;
 
@@ -63,6 +64,23 @@ function Applications() {
   const [showReferralModal, setShowReferralModal] = useState(false);
   const [showMessagesModal, setShowMessagesModal] = useState(false);
   const [analysisApp, setAnalysisApp] = useState<Application | null>(null);
+
+  // Live unread badges: a candidate message bumps its row (unless that thread is open right now),
+  // and a recruiter reading the thread clears it.
+  useChatEvents((event) => {
+    if (event.type === "reconnected") return;
+    const open = showMessagesModal && selectedAppForDetails === event.application_id;
+    setApplications((prev) =>
+      prev.map((a) => {
+        if (a.id !== event.application_id) return a;
+        if (event.type === "read" && event.reader === "recruiter") return { ...a, unread_messages: 0 };
+        if (event.type === "message" && event.message.sender_type === "candidate" && !open) {
+          return { ...a, unread_messages: (a.unread_messages ?? 0) + 1 };
+        }
+        return a;
+      })
+    );
+  });
   const [batchScoring, setBatchScoring] = useState(false);
 
   const fetchData = useCallback(async () => {

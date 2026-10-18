@@ -17,6 +17,7 @@ const (
 	CtxAdminID      = "admin_id"
 	CtxCompanyID    = "company_id"
 	CtxRole         = "role"
+	ctxAdminToken   = "admin_token"
 	CtxSuperAdminID = "super_admin_id"
 )
 
@@ -78,8 +79,24 @@ func AuthMiddleware() gin.HandlerFunc {
 		c.Set(CtxAdminID, adminID)
 		c.Set(CtxCompanyID, companyID)
 		c.Set(CtxRole, role)
+		c.Set(ctxAdminToken, claims)
 		c.Next()
 	}
+}
+
+// SessionStillActive re-runs the session check (cached) for long-lived requests such as event
+// streams, so a removed admin or suspended company is cut off mid-stream too.
+func SessionStillActive(c *gin.Context) bool {
+	claims, ok := c.Get(ctxAdminToken)
+	if !ok {
+		return false
+	}
+	t := claims.(utils.AdminToken)
+	if time.Now().After(t.IssuedAt.Add(sessionTTL)) {
+		return false
+	}
+	_, active, err := sessionActive(t)
+	return err == nil && active
 }
 
 // RequireOwner limits a route to company owners; use after AuthMiddleware.

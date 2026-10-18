@@ -35,6 +35,7 @@ func main() {
 	}
 
 	services.StartUploadJanitor()
+	services.StartChatListener()
 
 	router := gin.Default()
 	// Only trust X-Forwarded-For from listed proxies so rate limits can't be spoofed.

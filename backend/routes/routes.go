@@ -40,6 +40,8 @@ func SetupRoutes(router *gin.Engine) {
 	public.POST("/candidate/status", controllers.GetApplicationStatus)
 	public.POST("/candidate/messages/send", controllers.SendCandidateMessage)
 	public.POST("/candidate/messages", controllers.GetCandidateMessages)
+	public.POST("/candidate/stream-token", controllers.CandidateStreamToken)
+	public.GET("/candidate/events", controllers.CandidateChatEvents)
 
 	// Generous per-IP cap; several protected routes fan out to CV downloads.
 	protected := api.Group("", middleware.AuthMiddleware(), middleware.RateLimit(300, time.Minute))
@@ -63,6 +65,7 @@ func SetupRoutes(router *gin.Engine) {
 
 	protected.GET("/dashboard/stats", controllers.GetDashboardStats)
 	protected.GET("/messages/unread-summary", controllers.GetUnreadSummary)
+	protected.GET("/events", controllers.ChatEvents)
 	protected.GET("/applications", controllers.GetApplications)
 	protected.PUT("/applications/:id/shortlist", controllers.ShortlistApplication)
 	protected.PUT("/applications/:id/reject", controllers.RejectApplication)

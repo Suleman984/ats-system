@@ -116,7 +116,7 @@ Open `http://localhost:3000`.
 
 | Variable | Required | Description |
 |---|---|---|
-| `DATABASE_URL` | yes | Supabase Postgres connection string (session pooler) |
+| `DATABASE_URL` | yes | Supabase Postgres connection string: session pooler (port 5432) or direct. Live chat uses `LISTEN`, which the transaction pooler (6543) doesn't support |
 | `JWT_SECRET` | yes | At least 32 random characters |
 | `SUPABASE_URL` | for uploads | `https://<ref>.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | for uploads | Used server-side only, to write to Storage |
@@ -142,7 +142,8 @@ The frontend reads `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_FRONTEND_URL` and `NEXT_P
 |---|---|
 | Auth | `POST /api/auth/{register,login,logout,forgot-password,reset-password,verify-email,verify-email/resend}`, `GET /api/auth/me`, `GET /api/auth/invites`, `POST /api/auth/invites/accept`, `POST /api/super-admin/{login,logout}` |
 | Public | `GET /api/jobs/public/:companyId`, `GET /api/public/jobs/:id`, `POST /api/applications`, `POST /api/upload/cv`, `POST /api/upload/portfolio` |
-| Candidate portal | `POST /api/candidate/status`, `POST /api/candidate/messages`, `POST /api/candidate/messages/send` |
+| Candidate portal | `POST /api/candidate/status`, `POST /api/candidate/messages`, `POST /api/candidate/messages/send`, `POST /api/candidate/stream-token`, `GET /api/candidate/events` (SSE) |
+| Live chat | `GET /api/events` (SSE, company-scoped), `GET /api/messages/unread-summary` |
 | Jobs | `GET/POST /api/jobs`, `GET/PUT/DELETE /api/jobs/:id` |
 | Applications | `GET /api/applications`, `PUT /api/applications/:id/{shortlist,advance,reject,reopen}`, `POST /api/applications/:id/track-cv-view`, `GET /api/applications/:id/files/{resume,portfolio}`, `DELETE /api/applications/:id`, `POST /api/applications/bulk-delete`, `GET/POST /api/applications/:id/messages` |
 | Scoring | `POST /api/applications/ai-shortlist`, `POST /api/applications/ai-shortlist-batch` |

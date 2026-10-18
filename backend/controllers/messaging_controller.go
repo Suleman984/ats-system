@@ -49,6 +49,7 @@ func SendCandidateMessage(c *gin.Context) {
 		}
 	}()
 
+	services.PublishChatEvent(services.ChatEvent{Type: "message", ApplicationID: app.ID, CompanyID: app.CompanyID, MessageID: &msg.ID})
 	c.JSON(http.StatusCreated, gin.H{"message": "Message sent successfully", "data": msg})
 }
 
@@ -98,6 +99,7 @@ func SendRecruiterMessage(c *gin.Context) {
 		}
 	}()
 
+	services.PublishChatEvent(services.ChatEvent{Type: "message", ApplicationID: app.ID, CompanyID: app.CompanyID, MessageID: &msg.ID})
 	c.JSON(http.StatusCreated, gin.H{"message": "Message sent successfully", "data": msg})
 }
 
@@ -115,7 +117,7 @@ func GetCandidateMessages(c *gin.Context) {
 	if !ok {
 		return
 	}
-	respondWithThread(c, app.ID, models.SenderRecruiter, true)
+	respondWithThread(c, app, models.SenderRecruiter, true)
 }
 
 func GetRecruiterMessages(c *gin.Context) {
@@ -127,12 +129,13 @@ func GetRecruiterMessages(c *gin.Context) {
 	if !ok {
 		return
 	}
-	respondWithThread(c, app.ID, models.SenderCandidate, false)
+	respondWithThread(c, app, models.SenderCandidate, false)
 }
 
 // respondWithThread returns the conversation and marks the other side's messages read.
 // forCandidate hides which recruiter wrote each message.
-func respondWithThread(c *gin.Context, applicationID uuid.UUID, markReadFrom string, forCandidate bool) {
+func respondWithThread(c *gin.Context, app *models.Application, markReadFrom string, forCandidate bool) {
+	applicationID := app.ID
 	var messages []models.Message
 	if err := config.DB.Where("application_id = ?", applicationID).Order("created_at asc").Find(&messages).Error; err != nil {
 		serverError(c, "Failed to fetch messages")
@@ -140,9 +143,17 @@ func respondWithThread(c *gin.Context, applicationID uuid.UUID, markReadFrom str
 	}
 
 	now := time.Now()
-	config.DB.Model(&models.Message{}).
+	marked := config.DB.Model(&models.Message{}).
 		Where("application_id = ? AND sender_type = ? AND is_read = false", applicationID, markReadFrom).
 		Updates(map[string]any{"is_read": true, "read_at": now})
+	if marked.Error == nil && marked.RowsAffected > 0 {
+		// Lets the sender see "Seen" and clears the recruiters' unread badges live.
+		reader := models.SenderRecruiter
+		if markReadFrom == models.SenderRecruiter {
+			reader = models.SenderCandidate
+		}
+		services.PublishChatEvent(services.ChatEvent{Type: "read", ApplicationID: applicationID, CompanyID: app.CompanyID, Reader: reader})
+	}
 
 	for i := range messages {
 		if messages[i].SenderType == markReadFrom && !messages[i].IsRead {

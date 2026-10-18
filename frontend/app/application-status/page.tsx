@@ -10,6 +10,7 @@ import {
 import { toast } from "@/components/Toast";
 import MessageThread from "@/components/applications/MessageThread";
 import { statusBadge, statusIcon } from "@/lib/status";
+import { openCandidateStream } from "@/lib/realtime";
 import { useSearchParams } from "next/navigation";
 
 function ApplicationStatus() {
@@ -36,6 +37,30 @@ function ApplicationStatus() {
     }
   };
 
+  // Live replies: while an application is shown, a stream pushes new messages and read receipts.
+  const liveId = application?.id;
+  const liveEmail = application?.email;
+  useEffect(() => {
+    if (!liveId || !liveEmail) return;
+    const current = { id: liveId, email: liveEmail } as ApplicationStatus;
+    return openCandidateStream(
+      () => candidatePortalAPI.streamToken(liveId, liveEmail).then((r) => r.data.token),
+      (event) => {
+        if (event.type === "reconnected") {
+          loadMessages(current);
+        } else if (event.type === "read") {
+          if (event.reader === "recruiter") {
+            setMessages((prev) => prev.map((m) => (m.sender_type === "candidate" ? { ...m, is_read: true } : m)));
+          }
+        } else if (event.message.sender_type === "recruiter") {
+          loadMessages(current); // reload through the API so the reply is marked read
+        } else {
+          setMessages((prev) => (prev.some((m) => m.id === event.message.id) ? prev : [...prev, event.message]));
+        }
+      }
+    );
+  }, [liveId, liveEmail]);
+
   const handleSendMessage = async (text: string) => {
     if (!application) return false;
     try {
@@ -44,7 +69,9 @@ function ApplicationStatus() {
         application.email,
         text
       );
-      setMessages((prev) => [...prev, response.data.data]);
+      setMessages((prev) =>
+        prev.some((m) => m.id === response.data.data.id) ? prev : [...prev, response.data.data]
+      );
       return true;
     } catch (error) {
       toast.error(errorMessage(error, "Failed to send message"));
