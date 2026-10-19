@@ -292,3 +292,25 @@ func loadCompanyJob(c *gin.Context, id uuid.UUID) (*models.Job, bool) {
 	}
 	return &job, true
 }
+
+// GetSitemapEntries lists what search engines may index: open, unexpired jobs of active companies.
+func GetSitemapEntries(c *gin.Context) {
+	type entry struct {
+		JobID     uuid.UUID `json:"job_id"`
+		CompanyID uuid.UUID `json:"company_id"`
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+	rows := []entry{} // never null in JSON
+	err := config.DB.Table("jobs j").
+		Select("j.id as job_id, j.company_id, j.updated_at").
+		Joins("join companies c on c.id = j.company_id").
+		Where("j.status = 'open' AND j.deadline >= ? AND c.subscription_status <> ?", time.Now().UTC().Format("2006-01-02"), models.CompanySuspended).
+		Order("j.updated_at desc").Limit(45000). // sitemap files cap at 50,000 URLs, incl. careers pages
+		Scan(&rows).Error
+	if err != nil {
+		serverError(c, "Failed to build sitemap")
+		return
+	}
+	c.Header("Cache-Control", "public, max-age=3600")
+	c.JSON(http.StatusOK, gin.H{"jobs": rows})
+}

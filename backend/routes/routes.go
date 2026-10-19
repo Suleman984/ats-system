@@ -34,6 +34,7 @@ func SetupRoutes(router *gin.Engine) {
 	public := api.Group("", middleware.RateLimit(60, time.Minute))
 	public.GET("/jobs/public/:companyId", controllers.GetPublicJobs)
 	public.GET("/public/jobs/:id", controllers.GetPublicJob)
+	public.GET("/public/sitemap", controllers.GetSitemapEntries)
 	public.POST("/applications", controllers.SubmitApplication)
 	public.POST("/upload/cv", controllers.UploadCV)
 	public.POST("/upload/portfolio", controllers.UploadPortfolio)

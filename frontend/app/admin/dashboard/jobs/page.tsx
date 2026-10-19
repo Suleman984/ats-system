@@ -5,10 +5,13 @@ import { jobAPI, Job, errorMessage, formatDateOnly } from "@/lib/api";
 import Link from "next/link";
 import { toast } from "@/components/Toast";
 import { useDashboardHref, useIsOwner } from "@/lib/dashboard-path";
+import { useAuthStore } from "@/lib/store";
+import CopyLinkButton from "@/components/CopyLinkButton";
 
 export default function JobsPage() {
   const href = useDashboardHref();
   const isOwner = useIsOwner();
+  const companyId = useAuthStore((state) => state.user?.company_id);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState("");
@@ -63,12 +66,21 @@ export default function JobsPage() {
       <div className="max-w-7xl mx-auto">
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-3xl font-bold">Jobs</h1>
-          <Link
-            href={href("/admin/dashboard/jobs/create")}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-          >
-            Post New Job
-          </Link>
+          <div className="flex flex-wrap gap-2">
+            {companyId && (
+              <CopyLinkButton
+                path={`/jobs/${companyId}`}
+                label="🔗 Copy careers page link"
+                className="px-4 py-2 border border-blue-600 text-blue-600 rounded-lg hover:bg-blue-50"
+              />
+            )}
+            <Link
+              href={href("/admin/dashboard/jobs/create")}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            >
+              Post New Job
+            </Link>
+          </div>
         </div>
 
         {/* Filter */}
@@ -153,6 +165,13 @@ export default function JobsPage() {
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex gap-2 flex-wrap">
+                        {job.status === "open" && (
+                          <CopyLinkButton
+                            path={`/apply/${job.id}`}
+                            label="Copy apply link"
+                            className="text-blue-600 hover:underline text-sm"
+                          />
+                        )}
                         <Link
                           href={href(`/admin/dashboard/jobs/${job.id}/edit`)}
                           className="text-blue-600 hover:underline text-sm"

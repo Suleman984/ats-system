@@ -38,3 +38,46 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
+
+  # Full-stack smoke test: local Supabase (migrations + seed) + the API + ClamAV.
+  e2e:
+    runs-on: ubuntu-latest
+    needs: backend
+    services:
+      clamav:
+        image: clamav/clamav:stable
+        ports: ["3310:3310"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.101.0
+      - name: Start Supabase (database, auth, REST, storage only)
+        run: supabase start -x analytics,edge-runtime,functions,imgproxy,inbucket,meta,realtime,studio,vector
+      - name: Wait for ClamAV virus definitions
+        run: |
+          for i in $(seq 1 60); do
+            printf 'zPING\0' | nc -w 2 127.0.0.1 3310 | grep -q PONG && exit 0
+            sleep 5
+          done
+          echo "ClamAV did not become ready" && exit 1
+      - name: Start API
+        working-directory: backend
+        run: |
+          go build -o api .
+          export SUPABASE_SERVICE_ROLE_KEY=$(supabase status -o env | grep '^SERVICE_ROLE_KEY=' | cut -d= -f2- | tr -d '"')
+          PORT=8080 DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+            JWT_SECRET=ci-only-secret-0123456789abcdefghijklmnop \
+            SUPABASE_URL=http://127.0.0.1:54321 COOKIE_SECURE=false CLAMAV_ADDR=127.0.0.1:3310 \
+            ./api > api.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8080/health && exit 0; sleep 1; done
+          cat api.log && exit 1
+      - name: Smoke test
+        run: SMOKE_CLAMAV=1 ./scripts/smoke-test.sh
+      - name: API log
+        if: failure()
+        run: cat backend/api.log

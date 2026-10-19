@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -75,6 +76,17 @@ func handleUpload(c *gin.Context, kind, bucket string, allowed map[string]fileKi
 	}
 	if len(data) == 0 || !bytes.HasPrefix(data, fk.magic) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "File content does not match its extension"})
+		return
+	}
+
+	if err := services.ScanForMalware(data); err != nil {
+		if errors.Is(err, services.ErrInfected) {
+			log.Printf("blocked infected %s upload: %v", kind, err)
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "This file was flagged as unsafe and can't be uploaded."})
+			return
+		}
+		log.Printf("virus scan for %s upload: %v", kind, err)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "File scanning is temporarily unavailable. Please try again shortly."})
 		return
 	}
 

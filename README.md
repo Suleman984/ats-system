@@ -130,6 +130,7 @@ Open `http://localhost:3000`.
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM` | for SMTP | e.g. Gmail: `smtp.gmail.com`, `587`, your address, an app password |
 | `SMS_PROVIDER`, `TWILIO_*` | no | Set `SMS_PROVIDER=twilio` to enable SMS |
 | `COOKIE_SECURE` | no | Set `false` only for plain-http local development |
+| `CLAMAV_ADDR` | recommended | clamd address (e.g. `localhost:3310`) to virus-scan uploads; when set, unscannable uploads are refused |
 | `SAFEPAY_ENV` | for billing | `sandbox` (default) or `production` |
 | `SAFEPAY_PUBLIC_KEY`, `SAFEPAY_SECRET_KEY` | for billing | From the Safepay dashboard (Developers › API keys) |
 | `SAFEPAY_WEBHOOK_SECRET` | for billing | Shared secret of the webhook endpoint pointing at `/api/webhooks/safepay` |
@@ -141,7 +142,7 @@ The frontend reads `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_FRONTEND_URL` and `NEXT_P
 | Area | Endpoints |
 |---|---|
 | Auth | `POST /api/auth/{register,login,logout,forgot-password,reset-password,verify-email,verify-email/resend}`, `GET /api/auth/me`, `GET /api/auth/invites`, `POST /api/auth/invites/accept`, `POST /api/super-admin/{login,logout}` |
-| Public | `GET /api/jobs/public/:companyId`, `GET /api/public/jobs/:id`, `POST /api/applications`, `POST /api/upload/cv`, `POST /api/upload/portfolio` |
+| Public | `GET /api/jobs/public/:companyId`, `GET /api/public/jobs/:id`, `GET /api/public/sitemap`, `POST /api/applications`, `POST /api/upload/cv`, `POST /api/upload/portfolio` |
 | Candidate portal | `POST /api/candidate/status`, `POST /api/candidate/messages`, `POST /api/candidate/messages/send`, `POST /api/candidate/stream-token`, `GET /api/candidate/events` (SSE) |
 | Live chat | `GET /api/events` (SSE, company-scoped), `GET /api/messages/unread-summary` |
 | Jobs | `GET/POST /api/jobs`, `GET/PUT/DELETE /api/jobs/:id` |
@@ -160,6 +161,9 @@ The frontend reads `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_FRONTEND_URL` and `NEXT_P
 ```bash
 cd backend && go test ./...
 cd frontend && npm run lint && npm run typecheck && npm run build
+
+# End-to-end, against local Supabase with the seed loaded and the API running:
+./scripts/smoke-test.sh                 # add SMOKE_CLAMAV=1 when the API has CLAMAV_ADDR set
 ```
 
 The backend tests cover token audience separation, SSRF blocking, CV parsing and scoring, and rate limiting. CI runs all of the above on every push.
