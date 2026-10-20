@@ -156,6 +156,28 @@ The frontend reads `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_FRONTEND_URL` and `NEXT_P
 | Team (owners) | `GET /api/team`, `POST/DELETE /api/team/invites[/:id]`, `PUT /api/team/members/:id/role`, `DELETE /api/team/members/:id` |
 | Billing | `GET /api/billing`, `POST /api/billing/checkout` (owners), `POST /api/billing/payments/:id/confirm`, `POST /api/webhooks/safepay` |
 
+## Deployment
+
+A free setup: Supabase Free for the database and storage, Render Free for the API, Vercel Hobby for the frontend.
+
+**Database.** `supabase link --project-ref <ref>` then `supabase db push`. Use the **session pooler** connection string (port 5432) as `DATABASE_URL`; the transaction pooler can't `LISTEN`.
+
+**API on Render.** New › Blueprint, pick this repo; [`render.yaml`](render.yaml) builds [`backend/Dockerfile`](backend/Dockerfile) and generates `JWT_SECRET`. Fill in the prompted values:
+
+- `FRONTEND_URL`: the Vercel URL, e.g. `https://ats.vercel.app` (also used as the CORS origin)
+- `TRUSTED_PROXIES`: start with `10.0.0.0/8`, then confirm rate limits see real client IPs (two different networks shouldn't share a login limit)
+- `RESEND_API_KEY`, `RESEND_FROM_EMAIL`: free instances block SMTP ports, so use Resend or SendGrid
+
+Leave `CLAMAV_ADDR` unset; clamd doesn't fit in 512 MB, so uploads keep only the extension, signature and size checks. Free instances sleep after 15 minutes idle and take 30 to 60 seconds to wake. An uptime monitor hitting `/health` every 10 minutes keeps it awake within the 750 free hours, and keeps Supabase from pausing.
+
+**Frontend on Vercel.** Import the repo with root directory `frontend` and set:
+
+- `NEXT_PUBLIC_API_URL`: the Render URL, e.g. `https://ats-api.onrender.com`
+- `NEXT_PUBLIC_FRONTEND_URL`: the Vercel URL
+- `NEXT_PUBLIC_APP_MODE`: `production`
+
+Hobby is for non-commercial use; move to Pro before taking real payments. Putting both apps on one domain (`app.` and `api.`) keeps the session cookie first-party in browsers that block third-party cookies.
+
 ## Tests
 
 ```bash
